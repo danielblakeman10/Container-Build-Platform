@@ -16,7 +16,7 @@ A centralized, secure, and automated container build platform that turns source 
 
 | Feature | Description |
 |---------|-------------|
-| **Multi-Arch Builds** | Build for `amd64`, `arm64`, and more from a single pipeline |
+| **Multi-Arch Builds** | Build for `arm64`, and more from a single pipeline |
 | **Vulnerability Scanning** | Trivy integration scans every image before promotion to prod |
 | **ECR Publishing** | Automated push to Amazon ECR with lifecycle policies |
 | **Automated Tagging** | Semantic versioning + git SHA + build timestamp strategy |
