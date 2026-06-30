@@ -166,6 +166,14 @@ jobs:
         run: |
           aws s3 cp sbom.spdx.json s3://${{ secrets.SBOM_BUCKET }}/sbom-${{ github.sha }}.spdx.json
 
+      - name: Make script executable
+        run: chmod +x scripts/aws-healthcheck.sh
+
+      - name: Run AWS Connection Script
+        env:
+          ECR_REPO: ${{ secrets.ECR_REPO }}
+        run: ./scripts/aws-healthcheck.sh
+
   # ===========================================================================
   # STAGE 4: Sign Image
   # ===========================================================================
