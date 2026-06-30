@@ -58,3 +58,6 @@ kubeconfig
 # Logs
 *.log
 
+# Office temp/lock files
+~$*
+
