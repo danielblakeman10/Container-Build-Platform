@@ -1,0 +1,55 @@
+# AWS CodeBuild Alternative Configuration
+# This file provides an alternative build pipeline using AWS CodeBuild
+# instead of GitHub Actions
+
+version: 0.2
+
+phases:
+  pre_build:
+    commands:
+      - echo "Starting pre-build..."
+      - echo "Logging in to Amazon ECR..."
+      - aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY
+      - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+      - IMAGE_TAG=${COMMIT_HASH}
+      
+  build:
+    commands:
+      - echo "Building Docker image..."
+      - docker build \
+          --platform linux/amd64,linux/arm64 \
+          --cache-from $ECR_REGISTRY/$ECR_REPO:latest \
+          --build-arg BUILDKIT_INLINE_CACHE=1 \
+          -t $ECR_REGISTRY/$ECR_REPO:$IMAGE_TAG \
+          -f dockerfiles/Dockerfile .
+      
+  post_build:
+    commands:
+      - echo "Running vulnerability scan..."
+      - trivy image --severity HIGH,CRITICAL $ECR_REGISTRY/$ECR_REPO:$IMAGE_TAG
+      
+      - echo "Pushing image to ECR..."
+      - docker push $ECR_REGISTRY/$ECR_REPO:$IMAGE_TAG
+      
+      - echo "Building latest tag..."
+      - docker tag $ECR_REGISTRY/$ECR_REPO:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPO:latest
+      - docker push $ECR_REGISTRY/$ECR_REPO:latest
+      
+      - echo "Creating image listing..."
+      - printf '{"ImageURI":"%s:%s","Timestamp":%d}' \
+          $ECR_REGISTRY/$ECR_REPO \
+          $IMAGE_TAG \
+          $(date +%s) > image-listing.json
+      
+      - echo "Build completed successfully!"
+      
+artifacts:
+  files:
+    - image-listing.json
+    - '**/*'
+
+env:
+  exported-variables:
+    - IMAGE_TAG
+  variables:
+    AWS_REGION: us-east-1

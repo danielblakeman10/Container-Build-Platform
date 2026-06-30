@@ -1,0 +1,60 @@
+# .gitignore for Container Build Platform
+
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment files
+.env
+.env.*
+*.env
+
+# Docker (keep Dockerfiles, ignore local builds)
+.docker/
+!.dockerignore
+
+# Test coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+
+# AWS
+.aws/credentials
+
+# Docker Buildx
+.docker/
+
+# Kubernetes
+*.secret.yaml
+kubeconfig
+
+# Logs
+*.log
+

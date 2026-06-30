@@ -1,0 +1,106 @@
+# ECR Lifecycle Management Workflow
+
+name: ECR Lifecycle Management
+
+on:
+  schedule:
+    # Run daily at 02:00 UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: 'ECR Repository name'
+        required: true
+        default: 'myapp'
+      dry_run:
+        description: 'Dry run mode'
+        required: false
+        default: 'true'
+
+permissions:
+  contents: read
+
+jobs:
+  # ===========================================================================
+  # Apply ECR Lifecycle Policy
+  # ===========================================================================
+  apply-lifecycle-policy:
+    name: Apply Lifecycle Policy
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Apply ECR Lifecycle Policy
+        run: |
+          REPO="${{ github.event.inputs.repository || 'myapp' }}"
+          
+          echo "Applying lifecycle policy to: $REPO"
+          aws ecr put-lifecycle-policy \
+            --repository-name "$REPO" \
+            --lifecycle-policy-text file://registry/lifecycle-policy.json \
+            --region ${{ secrets.AWS_REGION }}
+
+  # ===========================================================================
+  # Cleanup Old Images
+  # ===========================================================================
+  cleanup-images:
+    name: Cleanup Old Images
+    runs-on: ubuntu-latest
+    needs: [apply-lifecycle-policy]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Run ECR Cleanup Script
+        run: |
+          chmod +x .github/scripts/cleanup-ecr.sh
+          REPO="${{ github.event.inputs.repository || 'myapp' }}"
+          DRY_RUN="${{ github.event.inputs.dry_run || 'true' }}"
+          
+          .github/scripts/cleanup-ecr.sh "$REPO" 30 50 "$DRY_RUN"
+
+  # ===========================================================================
+  # Report
+  # ===========================================================================
+  report:
+    name: Cleanup Report
+    runs-on: ubuntu-latest
+    needs: [cleanup-images]
+    if: always()
+    steps:
+      - name: Report Summary
+        run: |
+          REPO="${{ github.event.inputs.repository || 'myapp' }}"
+          REGION="${{ secrets.AWS_REGION }}"
+          
+          echo "## 📊 ECR Cleanup Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Repository**: $REPO" >> $GITHUB_STEP_SUMMARY
+          echo "- **Region**: $REGION" >> $GITHUB_STEP_SUMMARY
+          echo "- **Policy**: Applied" >> $GITHUB_STEP_SUMMARY
+          echo "- **Cleanup**: Completed" >> $GITHUB_STEP_SUMMARY
+          
+          # Get image count
+          IMAGE_COUNT=$(aws ecr list-images \
+            --repository-name "$REPO" \
+            --region "$REGION" \
+            --query 'imageIds | length' \
+            --output text 2>/dev/null || echo "N/A")
+          
+          echo "- **Total Images**: $IMAGE_COUNT" >> $GITHUB_STEP_SUMMARY

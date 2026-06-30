@@ -1,0 +1,20 @@
+# Development Docker Compose for local testing
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: dockerfiles/Dockerfile
+      target: builder
+      args:
+        - BUILDKIT_INLINE_CACHE=1
+    ports:
+      - "8080:8080"
+    environment:
+      - ENVIRONMENT=development
+      - LOG_LEVEL=debug
+    volumes:
+      - ../:/app
+      - /app/vendor
+    restart: unless-stopped

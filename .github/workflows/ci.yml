@@ -1,0 +1,226 @@
+# Container Build Platform - CI Pipeline
+
+name: Container Build Pipeline
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+    branches: [main, master]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  BUILD_PLATFORMS: linux/amd64,linux/arm64
+
+permissions:
+  contents: read
+  packages: write
+  security-events: write
+
+jobs:
+  # ===========================================================================
+  # STAGE 1: Build & Test
+  # ===========================================================================
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker meta (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/app
+          tags: |
+            type=sha,prefix=,format=long
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value={{date 'YYYYMMDD'}}-{{sha}}
+
+      - name: Docker login (GHCR)
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker login (ECR)
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ECR_REGISTRY }}
+          username: ${{ secrets.ECR_USERNAME }}
+          password: ${{ secrets.ECR_PASSWORD }}
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: dockerfiles/Dockerfile
+          platforms: ${{ env.BUILD_PLATFORMS }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
+
+  # ===========================================================================
+  # STAGE 2: Vulnerability Scan
+  # ===========================================================================
+  scan:
+    name: Vulnerability Scan
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          exit-code: '0'
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-scan
+
+      - name: Run Trivy config scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}'
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+
+  # ===========================================================================
+  # STAGE 3: Push to ECR
+  # ===========================================================================
+  push-ecr:
+    name: Push to ECR
+    needs: [build, scan]
+    if: github.event_name != 'pull_request' && success()
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Pull, tag, and push to ECR
+        run: |
+          ECR_REGISTRY=${{ secrets.ECR_REGISTRY }}
+          ECR_REPO=${{ secrets.ECR_REPO }}
+          IMAGE_TAG=${{ github.sha }}
+
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${IMAGE_TAG}
+          docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${IMAGE_TAG} $ECR_REGISTRY/$ECR_REPO:${IMAGE_TAG}
+          docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${IMAGE_TAG} $ECR_REGISTRY/$ECR_REPO:latest
+          docker push $ECR_REGISTRY/$ECR_REPO:${IMAGE_TAG}
+          docker push $ECR_REGISTRY/$ECR_REPO:latest
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}'
+          output-file: sbom.spdx.json
+
+      - name: Upload SBOM to S3
+        if: success()
+        run: |
+          aws s3 cp sbom.spdx.json s3://${{ secrets.SBOM_BUCKET }}/sbom-${{ github.sha }}.spdx.json
+
+  # ===========================================================================
+  # STAGE 4: Sign Image
+  # ===========================================================================
+  sign:
+    name: Sign Image
+    needs: [push-ecr]
+    if: github.event_name != 'pull_request' && success()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: 'v2.2.2'
+
+      - name: Login to ECR
+        run: |
+          aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | \
+            docker login --username AWS --password-stdin ${{ secrets.ECR_REGISTRY }}
+
+      - name: Sign image with Cosign
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          ECR_REPO=${{ secrets.ECR_REPO }}
+          IMAGE_TAG=${{ github.sha }}
+          cosign sign --yes \
+            "${{ secrets.ECR_REGISTRY }}/${ECR_REPO}:${IMAGE_TAG}"
+
+      - name: Attach SBOM to image
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          ECR_REPO=${{ secrets.ECR_REPO }}
+          IMAGE_TAG=${{ github.sha }}
+          cosign attach sbom \
+            --sbom sbom.spdx.json \
+            --type spdx \
+            "${{ secrets.ECR_REGISTRY }}/${ECR_REPO}:${IMAGE_TAG}"
+
+  # ===========================================================================
+  # Notify
+  # ===========================================================================
+  notify:
+    name: Notify
+    needs: [scan, push-ecr, sign]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Summary
+        run: |
+          echo "## 🐳 Container Build Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Build & Test | ${{ needs.build.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Vulnerability Scan | ${{ needs.scan.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Push to ECR | ${{ needs.push-ecr.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Sign Image | ${{ needs.sign.result }} |" >> $GITHUB_STEP_SUMMARY

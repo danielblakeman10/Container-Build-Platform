@@ -1,174 +1,261 @@
 # Container Build Platform
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Status-Production%20Ready-brightgreen" alt="Status">
-  <img src="https://img.shields.io/badge/Infrastructure-AWS%20ECR-blue" alt="AWS ECR">
-  <img src="https://img.shields.io/badge/CI/CD-GitHub%20Actions-orange" alt="CI/CD">
-  <img src="https://img.shields.io/badge/Security-Trivy%20Scan-red" alt="Security Scan">
-  <img src="https://img.shields.io/badge/License-MIT-lightgrey" alt="License">
-</p>
+> 🐳 Production-grade container build and registry platform with CI/CD pipeline, multi-stage Dockerfiles, vulnerability scanning, image signing, and ECR integration.
 
-## 🏭 Enterprise Container Factory
-
-A centralized, secure, and automated container build platform that turns source code into production-ready container images with integrated vulnerability scanning, automated tagging, and secure registry publishing.
-
-## 🚀 Features
-
-| Feature | Description |
-|---------|-------------|
-| **Multi-Arch Builds** | Build for `arm64`, and more from a single pipeline |
-| **Vulnerability Scanning** | Trivy integration scans every image before promotion to prod |
-| **ECR Publishing** | Automated push to Amazon ECR with lifecycle policies |
-| **Automated Tagging** | Semantic versioning + git SHA + build timestamp strategy |
-| **Security Gates** | Block deployment on critical/high CVEs |
-| **Docker Standards** | Multi-stage builds, .dockerignore, distroless base images |
-| **Build Caching** | Layer caching for faster rebuilds |
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Docker](https://img.shields.io/badge/Docker-Best%20Practices-blue)](https://docs.docker.com/build/building/best-practices/)
+[![GitHub Actions](https://github.com/danielblakeman10/Container-Build-Platform/actions/workflows/ci.yml/badge.svg)](https://github.com/danielblakeman10/Container-Build-Platform/actions)
+[![Trivy](https://img.shields.io/badge/Security-Trivy-green)](https://github.com/aquasecurity/trivy)
+[![AWS ECR](https://img.shields.io/badge/Registry-AWS%20ECR-orange)](https://aws.amazon.com/ecr/)
+![Tag Strategy](https://img.shields.io/badge/Tags-SemVer%20%2B%20SHA-brightgreen)
 
 ## 🏗 Architecture
 
-```
-┌──────────────┐     ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│   GitHub     │────▶│  GitHub      │────▶│   Trivy      │────▶│   Amazon     │
-│   (Source)   │     │  Actions     │     │  (Scan)      │     │   ECR        │
-│              │     │  (Build)     │     │              │     │  (Registry)  │
-└──────────────┘     └──────────────┘     └──────────────┘     └──────────────┘
-                                                    │
-                                                    ▼
-                                             ┌──────────────┐
-                                             │  Security    │
-                                             │  Gate        │
-                                             │  (Pass/Fail) │
-                                             └──────────────┘
-```
-
-## 📁 Project Structure
 
 ```
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌──────────────┐
+│   Git Push  │───▶│  CI Pipeline│───▶│  Build &   │───▶│   Scan &   │
+│             │    │  (GitHub    │    │  Test      │    │   Sign     │
+│             │    │   Actions)  │    │             │    │            │
+└─────────────┘    └─────────────┘    └─────────────┘    └──────┬───────┘
+                                                                │
+                                              ┌─────────────────▼──────────┐
+                                              │     AWS ECR Registry       │
+                                              │   ┌─────────┐  ┌───────┐  │
+                                              │   │  Latest │  │ SHA  │  │
+                                              │   │  Tag    │  │Tag   │  │
+                                              │   └─────────┘  └───────┘  │
+                                              └────────────────────────────┘
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐              │
+│Notary Sign │◀───│  Trivy Scan │◀───│  Docker    │◀───────────────┘
+│  (Cosign)  │    │  (CVE/      │    │  Build     │
+│             │    │   Config)   │    │             │    ┌───────────┴──────────┐
+└─────────────┘    └─────────────┘    └─────────────┘    │  Cleanup Jobs        │
+                                                         │  - Unused images     │
+                                                         │  - Expired tags      │
+                                                         │  - Old artifacts     │
+                                                         └────────────────────────┘
+```
+
+## Pipeline Stages
+
+| Stage | Description | Tools | Gate |
+|-------|-------------|-------|------|
+| 1 | **Build** | Multi-stage Dockerfile | ✅ Required |
+| 2 | **Test** | Unit/integration tests | ✅ Required |
+| 3 | **Scan** | Trivy (CVE + misconfig) | ⚠️ WARN on High, FAIL on Critical |
+| 4 | **Push** | AWS ECR | ✅ Required |
+| 5 | **Sign** | Cosign/Notary | ⚠️ Recommended |
+| 6 | **Cleanup** | Image lifecycle management | 📋 Scheduled |
+
+## Features
+
+- ✅ **Multi-Stage Docker Builds**: Optimized image size and reduced attack surface
+- ✅ **CI/CD Pipeline**: GitHub Actions with build → test → scan → push workflow
+- ✅ **Vulnerability Scanning**: Trivy for CVE detection and image misconfigurations
+- ✅ **Image Tagging**: Semantic versioning + commit SHA strategy
+- ✅ **AWS ECR Integration**: Secure image storage with lifecycle policies
+- ✅ **AWS CodeBuild Alternative**: Parallel build configuration for AWS-native CI
+- ✅ **Image Signing**: Cosign for SBOM generation and signature verification
+- ✅ **Image Cleanup**: Automated lifecycle management for unused/expired images
+- ✅ **Multi-Architecture**: Build for amd64 and arm64
+
+## Folder Structure
+
+```
+Container-Build-Platform/
+├── dockerfiles/
+│   ├── Dockerfile                     # Multi-stage Dockerfile template
+│   ├── .dockerignore                  # Docker ignore patterns
+│   └── docker-compose.dev.yml         # Development compose
 ├── .github/
 │   └── workflows/
-│       ├── build.yml            # Main build pipeline
-│       ├── scan.yml             # Vulnerability scanning
-│       └── release.yml          # Release tagging + ECR push
-├── dockerfiles/
-│   ├── Dockerfile               # Multi-stage production build
-│   ├── Dockerfile.alpine        # Alpine variant
-│   └── .dockerignore            # Build context rules
-├── scripts/
-│   ├── tag-image.sh             # Semantic versioning + SHA tags
-│   ├── scan-image.sh            # Trivy scan + severity check
-│   └── push-to-ecr.sh           # ECR authentication + push
-├── policies/
-│   ├── ecr-lifecycle.json       # Image lifecycle policy
-│   └── ecr-repo-policy.json     # Repository access policy
+│       ├── ci.yml                     # Main CI pipeline
+│       ├── ecr.yml                    # ECR lifecycle management
+│       └── signing.yml                # Image signing workflow
+│   └── scripts/
+│       ├── parse-version.sh           # Parse semver from tags
+│       ├── image-tagging.sh           # Generate image tags
+│       └── cleanup-ecr.sh             # ECR image cleanup
+├── terraform/
+│   └── modules/
+│       └── ecs-builder/               # ECR + ECR lifecycle module
+│           ├── main.tf
+│           ├── variables.tf
+│           └── outputs.tf
+├── examples/
+│   ├── python-app/
+│   │   ├── Dockerfile
+│   │   ├── main.py
+│   │   └── requirements.txt
+│   └── node-app/
+│       ├── Dockerfile
+│       ├── index.js
+│       └── package.json
+├── registry/
+│   └── lifecycle-policy.json          # ECR lifecycle policy
 ├── README.md
 ├── .gitignore
 └── LICENSE
 ```
 
-## 🛠 Tech Stack
+## Quickstart
 
-| Technology | Purpose |
-|-----------|---------|
-| **Docker** | Container image builds |
-| **GitHub Actions** | CI/CD pipeline orchestration |
-| **Amazon ECR** | Secure container registry |
-| **Trivy** | Vulnerability scanning |
-| **AWS IAM** | Least-privilege build permissions |
-| **AWS S3** | Build artifact storage |
-| **AWS Secrets Manager** | Secure credential management |
+### Prerequisites
 
-## 🚦 Quick Start
+- Docker 24.0+
+- AWS CLI configured
+- `cosign` installed (optional, for signing)
+- `trivy` installed (optional, for local scanning)
 
-### 1. Configure Secrets
+### Build and Push
 
 ```bash
-# GitHub Repository Settings > Secrets
-AWS_ACCESS_KEY_ID        # ECR access
-AWS_SECRET_ACCESS_KEY    # ECR secret
-ECR_REPOSITORY           # e.g., platform-api
-ECR_REGION               # e.g., us-east-2
-```
+# Clone the repo
+git clone https://github.com/danielblakeman10/Container-Build-Platform.git
+cd Container-Build-Platform
 
-### 2. Build an Image
-
-```bash
-# Local build
+# Build locally (multi-stage)
 docker build -t myapp:latest -f dockerfiles/Dockerfile .
 
-# Multi-arch build
-docker buildx build --platform linux/amd64,linux/arm64 \
-  -t myapp:latest -t myapp:v1.2.3 \
-  --push -f dockerfiles/Dockerfile .
-```
+# Run tests
+docker run --rm myapp:latest npm test
 
-### 3. Scan & Push
-
-```bash
 # Scan for vulnerabilities
-./scripts/scan-image.sh myapp:latest
+trivy image myapp:latest
+
+# Tag with semantic version
+docker tag myapp:latest myapp:1.2.3
+docker tag myapp:latest myapp:abc1234
 
 # Push to ECR
-./scripts/push-to-ecr.sh myapp latest
+aws ecr get-login-password --region us-east-1 | \
+  docker login --username AWS --password-stdin <account>.dkr.ecr.us-east-1.amazonaws.com
+docker push <account>.dkr.ecr.us-east-1.amazonaws.com/myapp:1.2.3
 ```
 
-### 4. Automate with CI/CD
+### Using the CI Pipeline
 
 ```yaml
-# .github/workflows/build.yml
-name: Build & Push
-
+# .github/workflows/ci.yml
+name: Container Build Pipeline
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build image
-        run: docker build -t myapp:${{ github.sha }} .
-      - name: Scan
-        run: ./scripts/scan-image.sh myapp:${{ github.sha }}
-      - name: Push to ECR
-        run: ./scripts/push-to-ecr.sh myapp ${{ github.sha }}
+  build-and-push:
+    uses: danielblakeman10/Container-Build-Platform/.github/workflows/ci.yml@main
 ```
 
-## 📊 Tagging Strategy
+## Security Best Practices
 
-| Tag Format | Example | Usage |
-|-----------|---------|-------|
-| `v1.2.3` | `myapp:v1.2.3` | Semantic version (release) |
-| `sha256:abc...` | `myapp:sha256:abc123` | Git commit SHA (immutable) |
-| `latest` | `myapp:latest` | Dev/staging only (never prod) |
-| `build-42` | `myapp:build-42` | CI build number (ephemeral) |
+### Dockerfile Best Practices
 
-## 🔒 Security
+```dockerfile
+# ✅ GOOD: Multi-stage build with non-root user
+FROM golang:1.21-alpine AS builder
+WORKDIR /app
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -o /server .
 
-- **Multi-stage builds** — no build tools in final image
-- **Non-root user** in containers
-- **Distroless/alpine base images** — minimal attack surface
-- **Trivy scan** — blocks critical/high CVEs
-- **ECR policies** — least-privilege access
-- **Secrets Manager** — no hardcoded credentials
-- **IAM roles** — CI/CD assumes scoped permissions
+FROM alpine:3.19
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+USER appuser
+COPY --from=builder /server /server
+ENTRYPOINT ["/server"]
+```
 
-## 📦 Deliverables
+```dockerfile
+# ❌ BAD: Running as root, single-stage, cached credentials
+FROM ubuntu:latest
+RUN apt-get update && apt-get install -y curl
+COPY . .
+# No USER instruction = runs as root
+```
 
-- ✅ **Build scripts** — Automated multi-stage builds with tag management
-- ✅ **Dockerfile standards** — Production-ready, multi-arch Dockerfiles
-- ✅ **Security scanning** — Trivy integration with severity gates
-- ✅ **ECR publishing** — Automated push with lifecycle policies
-- ✅ **GitHub Actions CI/CD** — End-to-end build pipeline
+### Image Tagging Strategy
 
-## 🏢 Enterprise Value
+| Tag Type | Example | Use Case |
+|----------|---------|----------|
+| Latest | `myapp:latest` | Development, always points to newest |
+| Semantic Version | `myapp:1.2.3` | Production releases |
+| SemVer + Range | `myapp:1.2`, `myapp:1` | Staging, latest patch |
+| Commit SHA | `myapp:abc1234` | Reproducible builds |
+| Timestamp | `myapp:20240115-abc1234` | Audit trail |
 
-This platform is **essential for**:
-- **Platform Engineering** — Centralized container factory for all teams
-- **DevSecOps** — Security scanning built into every build
-- **Kubernetes Teams** — Reliable image registry for cluster deployments
-- **Compliance** — Audit trail of all images, scans, and deployments
+### Trivy Scan Configuration
 
-## 📄 License
+```yaml
+# .github/workflows/trivy.yml
+- name: Run Trivy vulnerability scanner
+  uses: aquasecurity/trivy-action@master
+  with:
+    image-ref: '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}'
+    format: 'table'
+    severity: 'CRITICAL,HIGH'
+    exit-code: '1'
+    ignore-unfixed: true
+```
 
-MIT License — see `LICENSE` for details.
+## Image Lifecycle Management
+
+### ECR Lifecycle Policy
+
+```json
+{
+  "rules": [
+    {
+      "rulePriority": 1,
+      "description": "Keep last 30 images and 90 days of latest tags",
+      "selection": {
+        "tagStatus": "any",
+        "countType": "imageCountMoreThan",
+        "countNumber": 30
+      },
+      "action": {
+        "type": "expire"
+      }
+    },
+    {
+      "rulePriority": 2,
+      "description": "Keep images tagged with 'latest' for 90 days",
+      "selection": {
+        "tagStatus": "tagged",
+        "tagPrefixList": ["latest"],
+        "countType": "olderThan",
+        "countNumber": 90
+      },
+      "action": {
+        "type": "expire"
+      }
+    },
+    {
+      "rulePriority": 3,
+      "description": "Delete untagged images older than 7 days",
+      "selection": {
+        "tagStatus": "untagged",
+        "countType": "olderThan",
+        "countNumber": 7
+      },
+      "action": {
+        "type": "expire"
+      }
+    }
+  ]
+}
+```
+
+## Contributing
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/add-python-dockerfile`)
+3. Commit your changes (`git commit -m 'feat: add Python multi-stage Dockerfile'`)
+4. Push to the branch (`git push origin feature/add-python-dockerfile`)
+5. Open a Pull Request
+
+## License
+
+MIT License - see [LICENSE](LICENSE) file for details.
