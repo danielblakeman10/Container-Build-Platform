@@ -172,7 +172,7 @@ doc.add_paragraph()
 meta = doc.add_paragraph()
 meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
 r = meta.add_run("Domain 1 (DevOps) \u2014 Project 3\n"
-                 "Author: Olalekan Gabriel Ogundare\n"
+                 "Author: Daniel Blakeman\n"
                  "Repository: github.com/danielblakeman10/Container-Build-Platform")
 r.font.size = Pt(10); r.font.color.rgb = GRAY
 
@@ -314,7 +314,39 @@ body("A naive Dockerfile ships the compiler, source code, and build tools to pro
 add_image("diagram_multistage.png", width=6.4,
           caption="Figure 2 \u2014 Build artifacts are copied forward; build tooling is discarded.")
 
+h2("3.1.1 IMPORTANT \u2014 a Dockerfile is a recipe, not a script you type")
+body("Before we go line by line, clear up the single most common point of confusion. "
+     "The block of text below is NOT a list of commands you paste into your terminal "
+     "one at a time. It is the entire contents of ONE file in your repository:", bold=False)
+code_block("C:\\...\\Container-Build-Platform\\dockerfiles\\Dockerfile")
+body("Think of it like a cake recipe. You do not perform each step in your own kitchen. "
+     "You hand the whole recipe to a baker \u2014 Docker \u2014 and say \u201cbuild this.\u201d Docker then "
+     "reads the file top to bottom and runs every instruction itself, inside a "
+     "throwaway container. You never run the FROM / RUN / COPY lines by hand.")
+body("That single hand-off is ONE command, run ONCE, from the repository root folder:", bold=True)
+code_block("# from C:\\...\\Container-Build-Platform  (the repo root)\n"
+           "docker build -f dockerfiles/Dockerfile -t myapp:latest .")
+info_table(
+    ["You write...", "What actually happens"],
+    [
+        ["The Dockerfile (the recipe)", "You edit it once in dockerfiles/Dockerfile and save it."],
+        ["docker build ... (the hand-off)", "You type this ONE line in Git-Bash. Docker does the rest."],
+        ["Each FROM / RUN / COPY line", "Docker runs it FOR you, in order, inside the build. Never you."],
+    ])
+callout("[i] KEY IDEA", "Every instruction word (FROM, RUN, COPY, WORKDIR, USER, "
+        "ENTRYPOINT...) is a directive TO Docker. 'RUN something' means \u201cDocker, run "
+        "'something' inside the container while building.\u201d It does not mean you run it.")
+callout("[!] WATCH OUT", "This particular Dockerfile assumes a Go application (it expects "
+        "go.mod, go.sum and Go source). It is a best-practice TEMPLATE. If you point "
+        "'docker build' at it without a real Go app present, the 'COPY go.mod go.sum ./' "
+        "line will fail. To try it end to end, use a Go app (or swap the builder stage "
+        "for your app's language). The nginx app in examples/ is a separate, simpler demo.")
+
 h2("3.2 Stage 1 \u2014 the builder")
+body("This is the FIRST of three stages inside the single Dockerfile. Everything from "
+     "this 'FROM' line down to the next 'FROM' line is Stage 1. Its job: compile your "
+     "code and run your tests inside a full Go toolchain. None of it survives into the "
+     "final image \u2014 only the compiled binary is carried forward.")
 code_block(
     "FROM --platform=$BUILDPLATFORM golang:1.21-alpine AS builder\n\n"
     "RUN apk add --no-cache git ca-certificates\n"
@@ -340,16 +372,38 @@ bullet("**-ldflags=\"-w -s -trimpath\"** \u2014 -w/-s strip debug symbols (small
        "info for an attacker); -trimpath removes local filesystem paths from the binary.")
 bullet("**Tests run inside the build** \u2014 if a test fails, the image never gets built. The "
        "build itself is your first quality gate.")
+callout("[>] WHAT YOU ACTUALLY DO HERE", "Nothing line-by-line. You do NOT type 'FROM', "
+        "'RUN go build', etc. These instructions live in dockerfiles/Dockerfile and Docker "
+        "executes them for you inside the build. Your only action for this entire stage is "
+        "the single 'docker build' command (see Part 4) run from the repo root in Git-Bash. "
+        "You touch THIS section only to change how your app compiles \u2014 e.g. swap the Go "
+        "version on the 'FROM' line, or add a build flag \u2014 then save and re-run 'docker build'.")
 
 h2("3.3 Stage 2 \u2014 certificates")
+body("Everything from this second 'FROM' line down to the next 'FROM' is Stage 2. It is "
+     "a tiny, separate stage whose only job is to grab a clean set of TLS root "
+     "certificates that the final image will need for HTTPS.")
 code_block(
     "FROM alpine:3.19 AS certs\n"
     "RUN apk --update add ca-certificates")
 body("A separate tiny stage whose only job is to provide the TLS root certificates your "
      "app needs to make HTTPS calls. Isolating it keeps the final image minimal and the "
      "intent clear.")
+bullet("**FROM alpine:3.19 AS certs** \u2014 starts a fresh stage named 'certs' from a "
+       "minimal Alpine Linux. Naming it lets Stage 3 copy from it by name.")
+bullet("**apk --update add ca-certificates** \u2014 installs the standard bundle of trusted "
+       "certificate authorities into /etc/ssl/certs/ inside this stage.")
+callout("[>] WHAT YOU ACTUALLY DO HERE", "Nothing by hand. You do not type these two "
+        "lines. They already live in dockerfiles/Dockerfile, and Docker runs them "
+        "automatically as part of the same 'docker build' command from Stage 1. This "
+        "stage produces no output you interact with \u2014 it just sits ready for Stage 3 to "
+        "copy the certs out of it. You only ever touch this section if you want to CHANGE "
+        "it (e.g. bump the Alpine version); then you edit the file and re-run 'docker build'.")
 
 h2("3.4 Stage 3 \u2014 the production image")
+body("The third and final 'FROM' begins Stage 3 \u2014 the image you actually ship. It starts "
+     "from nothing and pulls in only the two finished artifacts from the earlier stages: "
+     "the compiled binary (from 'builder') and the certificates (from 'certs').")
 code_block(
     "FROM scratch\n\n"
     "COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/\n"
@@ -372,6 +426,12 @@ bullet("**ENTRYPOINT (exec form)** \u2014 the JSON-array form runs the binary di
 callout("[!] PITFALL", "Because 'scratch' has no shell, you cannot 'docker exec' a bash "
         "session into this container to debug it. For debugging, build the 'builder' "
         "target instead (see the dev compose file in Part 4).")
+callout("[>] WHAT YOU ACTUALLY DO HERE", "Again, nothing by hand \u2014 Docker assembles this "
+        "final image automatically at the end of the same 'docker build' run. The PAYOFF "
+        "of this stage is the image itself: after the build finishes you interact with it "
+        "with normal commands like 'docker run -p 8080:8080 myapp:latest' (run it) or "
+        "'docker images' (see it). You edit THIS section only to change runtime behaviour "
+        "\u2014 the exposed port, the health check, or the user the app runs as.")
 
 # ============================================================
 # PART 4 - BUILD LOCALLY
@@ -856,5 +916,7 @@ end.alignment = WD_ALIGN_PARAGRAPH.CENTER
 r = end.add_run("\u2014 End of Tutorial \u2014\nContainer Build Platform \u00b7 Enterprise Container Factory")
 r.italic = True; r.font.color.rgb = GRAY; r.font.size = Pt(10)
 
+doc.core_properties.author = "Blakeman, Daniel"
+doc.core_properties.last_modified_by = "Blakeman, Daniel"
 doc.save(OUT)
 print("Saved:", OUT, os.path.getsize(OUT), "bytes")
