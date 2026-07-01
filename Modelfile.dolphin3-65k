@@ -1,3 +1,0 @@
-FROM huihui_ai/dolphin3-abliterated
-
-PARAMETER num_ctx 65536

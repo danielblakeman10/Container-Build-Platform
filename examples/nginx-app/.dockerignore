@@ -1,6 +1,0 @@
-.git
-.github
-terraform
-*.pem
-*.key
-.env
