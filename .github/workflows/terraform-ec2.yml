@@ -62,6 +62,10 @@ jobs:
         if: inputs.action == 'apply'
         run: terraform apply -auto-approve
 
+      - name: Show Terraform outputs
+        if: inputs.action == 'apply'
+        run: terraform output
+
       - name: Terraform destroy
         if: inputs.action == 'destroy'
         run: terraform destroy -auto-approve
