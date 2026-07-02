@@ -7,13 +7,8 @@ permissions:
   id-token: write
   contents: read
 
-env:
-  AWS_REGION: us-east-1
-  ROLE_TO_ASSUME: arn:aws:iam::866934333672:role/GitHubActionsOIDCRole
-
 jobs:
   test-oidc:
-    name: Test OIDC Auth
     runs-on: ubuntu-latest
 
     steps:
@@ -24,5 +19,4 @@ jobs:
           aws-region: us-east-1
 
       - name: Verify AWS identity
-        run: |
-          aws sts get-caller-identity
+        run: aws sts get-caller-identity
