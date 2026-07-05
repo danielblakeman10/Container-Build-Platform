@@ -1,0 +1,1 @@
+container_image = "866934333672.dkr.ecr.us-east-1.amazonaws.com/tf-container-build-platform/nginx:v1"
