@@ -5,7 +5,7 @@ on:
 
 env:
   applicationfolder: spring-boot-hello-world-example
-  AWS_REGION: : ${{ env.AWS_REGION }}
+  AWS_REGION: ${{ env.AWS_REGION }}
   S3BUCKET: ${{ env.S3BUCKET }}
 
 
