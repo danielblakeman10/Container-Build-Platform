@@ -29,7 +29,7 @@ The repository demonstrates a production-shaped control plane: GitHub Actions us
     |-- main.tf           # VPC, ALB, ECR, ECS, IAM, and CloudWatch resources
     |-- outputs.tf        # ALB, ECR, ECS service, and cluster outputs
     |-- provider.tf       # AWS provider configuration
-    |-- terraform.tfvars  # Runtime container image value
+    |-- terraform.tfvars.example # Safe example for the runtime container image value
     `-- variables.tf      # Configurable deployment inputs
 ```
 
