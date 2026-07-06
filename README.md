@@ -361,6 +361,53 @@ terraform plan -var="container_image=<account-id>.dkr.ecr.us-east-1.amazonaws.co
 | `ecs_cluster_name` | ECS cluster hosting the service. |
 | `ecs_service_name` | ECS service managing the Fargate tasks. |
 
+## Estimated Cost and FinOps Budget
+
+This stack is intentionally small, but it still has real always-on AWS cost drivers. The estimate below assumes `us-east-1`, one ECS Fargate task running 24/7, `512` CPU units, `1024` MiB memory, one public Application Load Balancer, one NAT Gateway, light demo traffic, and a 730-hour month.
+
+| Cost component | Estimated monthly cost | FinOps note |
+| --- | ---: | --- |
+| ECS Fargate | ~$18 | Based on one Linux/x86 task using `0.5 vCPU` and `1 GB` memory running continuously. |
+| Application Load Balancer | ~$22-$30 | Includes ALB hourly cost, light LCU usage, and public IPv4 impact. |
+| NAT Gateway | ~$36-$40 | Usually the largest baseline cost because NAT is charged hourly plus per GB processed. |
+| Amazon ECR | <$1 | NGINX images are small; cost grows with retained image count and image size. |
+| CloudWatch Logs | <$1-$5 | Depends on container log volume and Container Insights metric ingestion. |
+| S3 Terraform state | Pennies | Terraform state storage and requests are negligible for this project. |
+| Data transfer out | Variable | Internet egress depends on demo traffic volume. |
+
+Expected always-on demo budget:
+
+```text
+Approximate monthly range: $85-$100
+```
+
+If this environment is only needed for demos, the strongest cost control is scheduled teardown. Running the stack for 40 hours/month instead of continuously can reduce the active infrastructure cost dramatically, especially for NAT Gateway, ALB, and Fargate.
+
+### Primary Cost Drivers
+
+- NAT Gateway: persistent hourly charge plus data processing charge.
+- Application Load Balancer: hourly charge plus LCU usage.
+- Public IPv4: hourly charge for public IPv4 addresses associated with AWS resources.
+- Fargate runtime: proportional to task CPU, memory, and running hours.
+- CloudWatch Logs: proportional to ingestion, retention, and Container Insights usage.
+
+### FinOps Controls
+
+- Add consistent tags such as `Project`, `Environment`, `Owner`, `CostCenter`, and `ManagedBy`.
+- Create AWS Budgets alerts at `$25`, `$50`, and `$100` monthly thresholds.
+- Add ECR lifecycle policies to expire stale image tags and untagged images.
+- Keep ECS desired count at `1` for demo environments.
+- Destroy non-production infrastructure when not actively demonstrating the platform.
+- Add VPC endpoints for ECR, CloudWatch Logs, and S3 if NAT Gateway data processing becomes material.
+- Group Cost Explorer views by service and project tags.
+- Separate dev, UAT, and production state keys or accounts before scaling this pattern.
+
+Recommended demo talk track:
+
+```text
+The platform is intentionally small, but it still demonstrates real FinOps tradeoffs. At this scale, Fargate is not the dominant cost driver; the persistent network edge components are. NAT Gateway and ALB create most of the baseline monthly cost, so the operating model uses tagging, budget alerts, lifecycle policies, VPC endpoint evaluation, and teardown automation for non-production environments.
+```
+
 ## Production Hardening Opportunities
 
 - Add HTTPS listener, ACM certificate, and HTTP-to-HTTPS redirect on the ALB.
