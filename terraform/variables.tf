@@ -82,10 +82,16 @@ variable "web_acl_name" {
   default     = "dcb-container-build-platform-waf"
 }
 
-variable "ecs_task_execution_role_name" {
-  description = "IAM role used by the ECS task for image pulls and logging"
+variable "web_acl_arn" {
+  description = "Regional AWS WAF Web ACL ARN associated with the demo ALB"
   type        = string
-  default     = "ecsTaskExecutionRole"
+  default     = "arn:aws:wafv2:us-east-1:866934333672:regional/webacl/dcb-container-build-platform-waf/454483ac-e0cf-4ccf-950d-978b492cd69a"
+}
+
+variable "ecs_task_execution_role_arn" {
+  description = "IAM role ARN used by the ECS task for image pulls and logging"
+  type        = string
+  default     = "arn:aws:iam::866934333672:role/ecsTaskExecutionRole"
 }
 
 variable "container_image" {

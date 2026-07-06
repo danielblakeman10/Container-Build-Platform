@@ -51,15 +51,6 @@ data "aws_lb_target_group" "main" {
   name = var.target_group_name
 }
 
-data "aws_iam_role" "ecs_task_execution" {
-  name = var.ecs_task_execution_role_name
-}
-
-data "aws_wafv2_web_acl" "alb" {
-  name  = var.web_acl_name
-  scope = "REGIONAL"
-}
-
 resource "aws_ecr_repository" "nginx" {
   name                 = var.ecr_repository_name
   image_tag_mutability = var.ecr_image_tag_mutability
@@ -105,8 +96,8 @@ resource "aws_ecs_task_definition" "nginx" {
   network_mode             = "awsvpc"
   cpu                      = var.task_cpu
   memory                   = var.task_memory
-  task_role_arn            = data.aws_iam_role.ecs_task_execution.arn
-  execution_role_arn       = data.aws_iam_role.ecs_task_execution.arn
+  task_role_arn            = var.ecs_task_execution_role_arn
+  execution_role_arn       = var.ecs_task_execution_role_arn
 
   runtime_platform {
     operating_system_family = "LINUX"
@@ -188,5 +179,5 @@ resource "aws_ecs_service" "nginx" {
 
 resource "aws_wafv2_web_acl_association" "alb" {
   resource_arn = data.aws_lb.main.arn
-  web_acl_arn  = data.aws_wafv2_web_acl.alb.arn
+  web_acl_arn  = var.web_acl_arn
 }

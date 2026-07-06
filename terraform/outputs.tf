@@ -20,5 +20,5 @@ output "ecs_service_name" {
 
 output "waf_web_acl_name" {
   description = "Regional AWS WAF Web ACL associated with the ALB"
-  value       = data.aws_wafv2_web_acl.alb.name
+  value       = var.web_acl_name
 }
