@@ -16,7 +16,7 @@ permissions:
 
 env:
   AWS_REGION: us-east-1
-  ECR_REPOSITORY: tf-container-build-platform/nginx
+  ECR_REPOSITORY: man-cbp/nginx
 
 jobs:
   deploy:

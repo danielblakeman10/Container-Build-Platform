@@ -1,6 +1,6 @@
 # Container Build Platform Demo Walkthrough
 
-Use this walkthrough to demonstrate the project as a complete DevSecOps platform story: source control, container build, AWS OIDC federation, Terraform-managed infrastructure, ECS Fargate deployment, network architecture, runtime verification, and FinOps controls.
+Use this walkthrough to demonstrate the project as a complete DevSecOps platform story: source control, container build, AWS OIDC federation, Terraform-managed ECS delivery, existing VPC/ALB integration, runtime verification, AWS WAF, and FinOps controls.
 
 ## Demo Objective
 
@@ -20,9 +20,9 @@ Have these pages ready in browser tabs:
 | --- | --- |
 | GitHub repository | `https://github.com/danielblakeman10/Container-Build-Platform` |
 | GitHub Actions | Repository -> Actions |
-| AWS ECR | AWS Console -> ECR -> Private repositories -> `tf-container-build-platform/nginx` |
-| AWS ECS | AWS Console -> ECS -> Clusters -> `tf-container-build-platform-cluster` |
-| AWS CloudWatch Logs | AWS Console -> CloudWatch -> Logs -> Log groups -> `/ecs/tf-container-build-platform-nginx` |
+| AWS ECR | AWS Console -> ECR -> Private repositories -> `man-cbp/nginx` |
+| AWS ECS | AWS Console -> ECS -> Clusters -> `man-cbp-cluster` |
+| AWS CloudWatch Logs | AWS Console -> CloudWatch -> Logs -> Log groups -> `/ecs/man-cbp-nginx` |
 | Live demo app | `http://man-cbp-alb-1019119768.us-east-1.elb.amazonaws.com` |
 | Demo ALB | AWS Console -> EC2 -> Load Balancers -> `man-cbp-alb` |
 | WAF check | AWS Console -> WAF & Shield -> Web ACLs |
@@ -40,7 +40,7 @@ Start on the repository `README.md`.
 Presenter explanation:
 
 ```text
-This project demonstrates a container build and deployment platform on AWS. GitHub Actions builds an NGINX container image, authenticates to AWS through OIDC, pushes the image to ECR, and uses Terraform to provision and update an ECS Fargate service behind an Application Load Balancer. The service runs inside a custom VPC with public and private subnet separation.
+This project demonstrates a container build and deployment platform on AWS. GitHub Actions builds an NGINX container image, authenticates to AWS through OIDC, pushes the image to ECR, and uses Terraform to adopt and update the live `man-cbp` ECS Fargate service behind an Application Load Balancer protected by AWS WAF.
 ```
 
 Point out the major README sections:
@@ -85,7 +85,7 @@ Key files to mention:
 | `.github/workflows/oidc-debug.yml` | Manual workflow to verify GitHub-to-AWS OIDC federation. |
 | `nginx/Dockerfile` | Defines the container image. |
 | `nginx/app/index.html` | Simple demo workload served by NGINX. |
-| `terraform/main.tf` | Provisions VPC, ALB, ECR, ECS, IAM, and CloudWatch. |
+| `terraform/main.tf` | Looks up existing `man-cbp` network and ALB resources, then manages the ECS delivery path, ECR, logs, and WAF association. |
 | `terraform/backend.tf` | Configures Terraform version, AWS provider, and S3 remote backend. |
 | `terraform/terraform.tfvars.example` | Safe placeholder showing expected runtime variable format. |
 
@@ -212,21 +212,20 @@ Walk through the resources in this order:
 
 | Area | Terraform resources | Explanation |
 | --- | --- | --- |
-| VPC foundation | `aws_vpc`, `aws_internet_gateway` | Creates the network boundary and public internet gateway. |
-| Subnets | `aws_subnet.public`, `aws_subnet.private` | Splits public ingress resources from private workloads. |
-| Egress | `aws_eip`, `aws_nat_gateway` | Lets private ECS tasks pull images and reach AWS APIs without public IPs. |
-| Routing | `aws_route_table`, `aws_route_table_association` | Sends public traffic to the IGW and private egress through NAT. |
-| Security groups | `aws_security_group.alb`, `aws_security_group.task` | Allows internet traffic only to ALB; tasks accept traffic only from ALB. |
-| Load balancing | `aws_lb`, `aws_lb_target_group`, `aws_lb_listener` | Exposes HTTP and forwards traffic to ECS tasks. |
+| VPC foundation | `data.aws_vpc.main` | Looks up the existing `man-cbp-vpc`. |
+| Subnets | `data.aws_subnet.*` | Uses the existing public and private `man-cbp` subnets. |
+| Security groups | `data.aws_security_group.alb`, `data.aws_security_group.task` | Uses the existing ALB and task security groups. |
+| Load balancing | `data.aws_lb.main`, `data.aws_lb_target_group.main` | Uses the existing ALB and target group. |
 | Registry | `aws_ecr_repository.nginx` | Stores the container image pushed by CI/CD. |
 | Compute | `aws_ecs_cluster`, `aws_ecs_task_definition`, `aws_ecs_service` | Runs the NGINX container on Fargate. |
-| IAM | `aws_iam_role.ecs_task_execution` | Allows ECS to pull from ECR and write logs. |
+| IAM | `data.aws_iam_role.ecs_task_execution` | Uses the existing ECS task execution role. |
 | Observability | `aws_cloudwatch_log_group.nginx` | Centralizes task logs with retention. |
+| Edge security | `aws_wafv2_web_acl_association.alb` | Keeps the regional Web ACL associated with the live ALB. |
 
 Presenter explanation:
 
 ```text
-The public layer is the ALB. The workload layer is ECS Fargate in private subnets. The task security group only accepts traffic from the ALB security group, which is the core network control for this demo.
+The public layer is the ALB. The workload layer is ECS Fargate in the `man-cbp` private subnets. The task security group only accepts traffic from the ALB security group, which is the core network control for this demo.
 ```
 
 ## 8. Show The AWS VPC Design
@@ -236,7 +235,7 @@ Open the `AWS VPC Diagram` section in `README.md`.
 Presenter explanation:
 
 ```text
-The VPC uses a standard public/private subnet pattern across two Availability Zones. The ALB is public and spans public subnets. ECS tasks run privately without public IPs. NAT Gateway provides controlled outbound access for private tasks.
+The VPC uses a public/private subnet pattern across two Availability Zones. The ALB is public and spans public subnets. ECS task ingress is controlled by the task security group, which only allows traffic from the ALB security group. NAT Gateway provides outbound routing for private route tables.
 ```
 
 Call out:
@@ -246,8 +245,8 @@ Call out:
   - `10.0.0.0/20`
   - `10.0.16.0/20`
 - Private subnets:
-  - `10.0.32.0/20`
-  - `10.0.48.0/20`
+  - `10.0.128.0/20`
+  - `10.0.144.0/20`
 - ALB accepts inbound HTTP.
 - ECS tasks are not directly internet-accessible.
 
@@ -313,7 +312,7 @@ man-cbp-vpc
 In AWS Console:
 
 ```text
-ECR -> Private repositories -> tf-container-build-platform/nginx -> Images
+ECR -> Private repositories -> man-cbp/nginx -> Images
 ```
 
 What to show:
@@ -331,7 +330,7 @@ CLI verification:
 
 ```bash
 aws ecr describe-images \
-  --repository-name tf-container-build-platform/nginx \
+  --repository-name man-cbp/nginx \
   --region us-east-1 \
   --query "reverse(sort_by(imageDetails,& imagePushedAt))[0]"
 ```
@@ -341,8 +340,8 @@ aws ecr describe-images \
 In AWS Console:
 
 ```text
-ECS -> Clusters -> tf-container-build-platform-cluster
--> Services -> tf-container-build-platform-nginx-service
+ECS -> Clusters -> man-cbp-cluster
+-> Services -> man-cbp-nginx-service
 ```
 
 What to show:
@@ -363,8 +362,8 @@ CLI verification:
 
 ```bash
 aws ecs describe-services \
-  --cluster tf-container-build-platform-cluster \
-  --services tf-container-build-platform-nginx-service \
+  --cluster man-cbp-cluster \
+  --services man-cbp-nginx-service \
   --region us-east-1 \
   --query "services[0].{Status:status,Desired:desiredCount,Running:runningCount,Pending:pendingCount,TaskDef:taskDefinition}"
 ```
@@ -407,7 +406,7 @@ Server: nginx
 In AWS Console:
 
 ```text
-CloudWatch -> Logs -> Log groups -> /ecs/tf-container-build-platform-nginx
+CloudWatch -> Logs -> Log groups -> /ecs/man-cbp-nginx
 ```
 
 Open a recent log stream similar to:
@@ -426,7 +425,7 @@ CLI verification:
 
 ```bash
 aws logs describe-log-streams \
-  --log-group-name /ecs/tf-container-build-platform-nginx \
+  --log-group-name /ecs/man-cbp-nginx \
   --region us-east-1 \
   --order-by LastEventTime \
   --descending \
@@ -569,7 +568,7 @@ terraform/*.tfvars.json
 Show example file:
 
 ```hcl
-container_image = "<account-id>.dkr.ecr.us-east-1.amazonaws.com/tf-container-build-platform/nginx:<tag>"
+container_image = "<account-id>.dkr.ecr.us-east-1.amazonaws.com/man-cbp/nginx:<tag>"
 ```
 
 Why this matters:
@@ -625,22 +624,22 @@ aws sts get-caller-identity
 
 ```bash
 aws ecr describe-images \
-  --repository-name tf-container-build-platform/nginx \
+  --repository-name man-cbp/nginx \
   --region us-east-1 \
   --query "reverse(sort_by(imageDetails,& imagePushedAt))[0]"
 ```
 
 ```bash
 aws ecs describe-services \
-  --cluster tf-container-build-platform-cluster \
-  --services tf-container-build-platform-nginx-service \
+  --cluster man-cbp-cluster \
+  --services man-cbp-nginx-service \
   --region us-east-1 \
   --query "services[0].{Status:status,Desired:desiredCount,Running:runningCount,Pending:pendingCount,TaskDef:taskDefinition}"
 ```
 
 ```bash
 aws logs describe-log-streams \
-  --log-group-name /ecs/tf-container-build-platform-nginx \
+  --log-group-name /ecs/man-cbp-nginx \
   --region us-east-1 \
   --order-by LastEventTime \
   --descending \

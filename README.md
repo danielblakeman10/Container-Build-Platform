@@ -2,16 +2,16 @@
 
 Container Build Platform is a reference DevSecOps deployment pattern for building a container image from GitHub, publishing it to Amazon ECR, and deploying it to Amazon ECS on AWS Fargate behind a public Application Load Balancer.
 
-The repository demonstrates a production-shaped control plane: GitHub Actions uses AWS OIDC federation instead of long-lived access keys, Docker builds an NGINX workload, Terraform provisions AWS networking and compute, and ECS runs the container in private subnets with ingress constrained through the ALB.
+The repository demonstrates a production-shaped control plane: GitHub Actions uses AWS OIDC federation instead of long-lived access keys, Docker builds an NGINX workload, Terraform adopts and manages the live `man-cbp` ECS delivery path, and ECS runs the container behind an ALB protected by AWS WAF.
 
 ## What This Demonstrates
 
 - Keyless GitHub Actions authentication to AWS using OpenID Connect.
 - Container build, tag, and push workflow into Amazon ECR.
-- Terraform-managed AWS infrastructure using an S3 remote backend.
+- Terraform-managed ECS delivery path using an S3 remote backend and import-backed adoption of live resources.
 - ECS Fargate service deployment with an ALB target group.
 - Custom VPC with public and private subnets across multiple Availability Zones.
-- Public ingress through ALB only; ECS tasks remain private.
+- Public ingress is constrained through the ALB security group; ECS task ingress is allowed only from the ALB security group.
 - CloudWatch Logs integration for container runtime logs.
 
 ## Repository Layout
@@ -42,7 +42,7 @@ The repository demonstrates a production-shaped control plane: GitHub Actions us
 | Authentication | GitHub OIDC + AWS IAM | Federates GitHub Actions to AWS without static AWS keys. |
 | Container Runtime | Docker | Builds the NGINX application image. |
 | Registry | Amazon ECR | Stores versioned container images. |
-| Infrastructure as Code | Terraform | Provisions and updates AWS infrastructure. |
+| Infrastructure as Code | Terraform | Adopts and updates the live `man-cbp` ECS delivery resources. |
 | Terraform State | Amazon S3 backend | Stores remote Terraform state for repeatable deployments. |
 | Networking | Amazon VPC | Provides public/private subnet isolation and routing. |
 | Ingress | Application Load Balancer | Exposes HTTP traffic to the service. |
@@ -86,7 +86,7 @@ flowchart LR
         S3[S3 Terraform state backend]
         ECR[Amazon ECR repository]
 
-        subgraph VPC["VPC: tf-container-build-platform-vpc"]
+        subgraph VPC["VPC: man-cbp-vpc"]
             IGW[Internet Gateway]
 
             subgraph Public["Public subnets"]
@@ -129,19 +129,19 @@ flowchart TB
     subgraph VPC["VPC 10.0.0.0/16"]
         subgraph AZA["Availability Zone us-east-1a"]
             PubA[Public subnet<br/>10.0.0.0/20]
-            PrivA[Private subnet<br/>10.0.32.0/20]
+            PrivA[Private subnet<br/>10.0.128.0/20]
         end
 
         subgraph AZB["Availability Zone us-east-1b"]
             PubB[Public subnet<br/>10.0.16.0/20]
-            PrivB[Private subnet<br/>10.0.48.0/20]
+            PrivB[Private subnet<br/>10.0.144.0/20]
         end
 
         PublicRT[Public route table<br/>0.0.0.0/0 to IGW]
         PrivateRT[Private route table<br/>0.0.0.0/0 to NAT]
-        NAT[NAT Gateway<br/>in first public subnet]
+        NAT[Regional NAT Gateway]
         ALB[Public ALB<br/>spans public subnets]
-        ECS[ECS Fargate tasks<br/>private subnets only]
+        ECS[ECS Fargate tasks<br/>private subnets]
     end
 
     IGW --> PublicRT
@@ -163,7 +163,7 @@ flowchart TB
 4. Docker builds the image from `nginx/Dockerfile`.
 5. The image is tagged with the Git commit SHA and pushed to ECR.
 6. Terraform initializes against the S3 backend.
-7. Terraform applies infrastructure changes and injects the new image URI into the ECS task definition.
+7. Terraform imports/adopts the `man-cbp` managed resources when needed, applies infrastructure changes, and injects the new image URI into the ECS task definition.
 8. ECS launches the updated NGINX task on Fargate in private subnets.
 9. Public users reach the service through the ALB DNS name.
 
@@ -177,11 +177,11 @@ This operating model follows the same production-style structure used in larger 
 | --- | --- | --- |
 | Keyless AWS access | GitHub Actions assumes AWS IAM roles through OIDC. | Scope trust policies by repository, branch, environment, and workflow. |
 | Immutable deploy artifact | Images are tagged with the Git commit SHA. | Promote the same digest across dev, UAT, and production instead of rebuilding. |
-| Infrastructure as code | Terraform owns VPC, ALB, ECR, ECS, IAM, and CloudWatch resources. | Split networking, platform, and application stacks into separate state files or modules. |
+| Infrastructure as code | Terraform adopts the live `man-cbp` ECR, ECS, CloudWatch, and WAF association while looking up existing network and ALB resources. | Split networking, platform, and application stacks into separate state files or modules. |
 | Remote state | Terraform uses an S3 backend. | Centralize state in a tooling account with encryption, versioning, least-privilege access, and locking. |
 | Environment control | `main` deploys the current stack. | Map `develop`, `uat`, and `main` to separate AWS accounts or isolated environments. |
 | Approval control | Manual `workflow_dispatch` is available. | Require protected GitHub Environments and approval gates before production apply. |
-| Runtime isolation | ECS tasks run in private subnets behind a public ALB. | Add VPC endpoints, private image pulls, HTTPS-only ingress, and environment-specific CIDRs. |
+| Runtime isolation | ECS task ingress is restricted to the ALB security group. | Disable task public IP assignment, add VPC endpoints, private image pulls, HTTPS-only ingress, and environment-specific CIDRs. |
 
 ### Pipeline Stages
 
@@ -243,8 +243,8 @@ After each deployment, validate the platform with:
 
 ```bash
 aws sts get-caller-identity
-aws ecr describe-images --repository-name tf-container-build-platform/nginx
-aws ecs describe-services --cluster tf-container-build-platform-cluster --services tf-container-build-platform-nginx-service
+aws ecr describe-images --repository-name man-cbp/nginx
+aws ecs describe-services --cluster man-cbp-cluster --services man-cbp-nginx-service
 aws elbv2 describe-target-health --target-group-arn <target-group-arn>
 curl -I http://<alb_dns_name>
 ```
@@ -253,31 +253,31 @@ curl -I http://<alb_dns_name>
 
 | Resource | Description |
 | --- | --- |
-| VPC | DNS-enabled VPC using `10.0.0.0/16` by default. |
-| Public subnets | One public subnet per configured Availability Zone with public IP assignment enabled. |
-| Private subnets | One private subnet per configured Availability Zone for ECS tasks. |
+| VPC | Existing DNS-enabled `man-cbp-vpc` using `10.0.0.0/16`. |
+| Public subnets | Existing public subnets used by the internet-facing ALB. |
+| Private subnets | Existing private subnets `10.0.128.0/20` and `10.0.144.0/20` used by ECS tasks. |
 | Internet Gateway | Provides public internet routing for the ALB and NAT Gateway. |
-| NAT Gateway | Allows private ECS tasks to reach AWS APIs and external endpoints without public IPs. |
+| NAT Gateway | Existing regional NAT Gateway for private route-table egress. |
 | Route tables | Separate public and private routing domains. |
 | ALB security group | Allows inbound HTTP on port 80 from the public internet. |
 | Task security group | Allows inbound container traffic only from the ALB security group. |
-| Application Load Balancer | Public HTTP entry point for the NGINX service. |
+| Application Load Balancer | Existing `man-cbp-alb` public HTTP entry point for the NGINX service. |
 | Target group | IP-based target group for Fargate tasks. |
-| ECR repository | Stores the NGINX container image. |
-| ECS cluster | Fargate cluster with Container Insights enabled. |
+| ECR repository | `man-cbp/nginx` stores the NGINX container image with scan-on-push enabled. |
+| ECS cluster | `man-cbp-cluster` Fargate cluster with enhanced Container Insights enabled. |
 | ECS task definition | Runs the NGINX image with CloudWatch log configuration. |
 | ECS service | Maintains the desired task count and registers tasks with the ALB. |
-| CloudWatch log group | Stores NGINX container logs with 14-day retention. |
+| CloudWatch log group | `/ecs/man-cbp-nginx` stores NGINX container logs with 30-day retention. |
 | IAM task execution role | Allows ECS to pull images and write logs. |
 
 ## Security Model
 
 - GitHub Actions uses OIDC role assumption, avoiding long-lived AWS access keys in repository secrets.
-- ECS tasks are deployed to private subnets with `assign_public_ip = false`.
+- ECS tasks are deployed in private subnets, and inbound access is restricted to the ALB security group.
 - The task security group accepts inbound traffic only from the ALB security group.
 - ALB ingress is intentionally public on HTTP port 80 for demonstration.
 - ECR encryption uses AWS-managed AES-256 encryption.
-- ECS task logs are centralized in CloudWatch Logs.
+- ECS task logs are centralized in CloudWatch Logs with 30-day retention.
 - Terraform state is remote in S3; production deployments should also enforce bucket versioning, encryption, least-privilege state access, and state locking behavior appropriate for the Terraform version in use.
 
 ## Prerequisites
@@ -337,7 +337,7 @@ Inspect planned AWS changes when backend and credentials are configured:
 ```bash
 cd terraform
 terraform init
-terraform plan -var="container_image=<account-id>.dkr.ecr.us-east-1.amazonaws.com/tf-container-build-platform/nginx:<tag>"
+terraform plan -var="container_image=<account-id>.dkr.ecr.us-east-1.amazonaws.com/man-cbp/nginx:<tag>"
 ```
 
 ## Demo Script

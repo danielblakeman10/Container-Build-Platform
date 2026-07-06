@@ -1,256 +1,117 @@
-resource "aws_vpc" "main" {
-  cidr_block           = var.vpc_cidr
-  enable_dns_support   = true
-  enable_dns_hostnames = true
-
-  tags = {
-    Name = "${var.project_name}-vpc"
+data "aws_vpc" "main" {
+  filter {
+    name   = "tag:Name"
+    values = [var.vpc_name]
   }
 }
 
-resource "aws_internet_gateway" "main" {
-  vpc_id = aws_vpc.main.id
-
-  tags = {
-    Name = "${var.project_name}-igw"
+data "aws_subnet" "public_1" {
+  filter {
+    name   = "tag:Name"
+    values = ["${var.project_name}-subnet-public1-us-east-1a"]
   }
 }
 
-resource "aws_subnet" "public" {
-  count                   = length(var.availability_zones)
-  vpc_id                  = aws_vpc.main.id
-  cidr_block              = cidrsubnet(var.vpc_cidr, 4, count.index)
-  availability_zone       = var.availability_zones[count.index]
-  map_public_ip_on_launch = true
-
-  tags = {
-    Name = "${var.project_name}-public-${var.availability_zones[count.index]}"
+data "aws_subnet" "public_2" {
+  filter {
+    name   = "tag:Name"
+    values = ["${var.project_name}-subnet-public2-us-east-1b"]
   }
 }
 
-resource "aws_subnet" "private" {
-  count             = length(var.availability_zones)
-  vpc_id            = aws_vpc.main.id
-  cidr_block        = cidrsubnet(var.vpc_cidr, 4, count.index + length(var.availability_zones))
-  availability_zone = var.availability_zones[count.index]
-
-  tags = {
-    Name = "${var.project_name}-private-${var.availability_zones[count.index]}"
+data "aws_subnet" "private_1" {
+  filter {
+    name   = "tag:Name"
+    values = ["${var.project_name}-subnet-private1-us-east-1a"]
   }
 }
 
-resource "aws_eip" "nat" {
-  domain = "vpc"
-
-  tags = {
-    Name = "${var.project_name}-nat-eip"
+data "aws_subnet" "private_2" {
+  filter {
+    name   = "tag:Name"
+    values = ["${var.project_name}-subnet-private2-us-east-1b"]
   }
 }
 
-resource "aws_nat_gateway" "main" {
-  allocation_id = aws_eip.nat.id
-  subnet_id     = aws_subnet.public[0].id
-
-  tags = {
-    Name = "${var.project_name}-nat"
-  }
-
-  depends_on = [aws_internet_gateway.main]
+data "aws_security_group" "alb" {
+  name   = var.alb_security_group_name
+  vpc_id = data.aws_vpc.main.id
 }
 
-resource "aws_route_table" "public" {
-  vpc_id = aws_vpc.main.id
-
-  route {
-    cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.main.id
-  }
-
-  tags = {
-    Name = "${var.project_name}-public-rt"
-  }
+data "aws_security_group" "task" {
+  name   = var.task_security_group_name
+  vpc_id = data.aws_vpc.main.id
 }
 
-resource "aws_route_table" "private" {
-  vpc_id = aws_vpc.main.id
-
-  route {
-    cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.main.id
-  }
-
-  tags = {
-    Name = "${var.project_name}-private-rt"
-  }
+data "aws_lb" "main" {
+  name = var.alb_name
 }
 
-resource "aws_route_table_association" "public" {
-  count          = length(var.availability_zones)
-  subnet_id      = aws_subnet.public[count.index].id
-  route_table_id = aws_route_table.public.id
+data "aws_lb_target_group" "main" {
+  name = var.target_group_name
 }
 
-resource "aws_route_table_association" "private" {
-  count          = length(var.availability_zones)
-  subnet_id      = aws_subnet.private[count.index].id
-  route_table_id = aws_route_table.private.id
+data "aws_iam_role" "ecs_task_execution" {
+  name = var.ecs_task_execution_role_name
 }
 
-resource "aws_security_group" "alb" {
-  name        = "${var.project_name}-alb-sg"
-  description = "Allows public HTTP traffic to the ALB"
-  vpc_id      = aws_vpc.main.id
-
-  ingress {
-    description = "Allow public internet traffic on port 80 to the ALB"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = {
-    Name = "${var.project_name}-alb-sg"
-  }
-}
-
-resource "aws_security_group" "task" {
-  name        = "${var.project_name}-task-sg"
-  description = "Allows HTTP only from the ALB security group"
-  vpc_id      = aws_vpc.main.id
-
-  ingress {
-    description     = "Allow HTTP only from the ALB security group"
-    from_port       = var.container_port
-    to_port         = var.container_port
-    protocol        = "tcp"
-    security_groups = [aws_security_group.alb.id]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = {
-    Name = "${var.project_name}-task-sg"
-  }
-}
-
-resource "aws_lb" "main" {
-  name               = "${var.project_name}-alb"
-  internal           = false
-  load_balancer_type = "application"
-  security_groups    = [aws_security_group.alb.id]
-  subnets            = aws_subnet.public[*].id
-
-  tags = {
-    Name = "${var.project_name}-alb"
-  }
-}
-
-resource "aws_lb_target_group" "main" {
-  name        = "${var.project_name}-tg"
-  port        = var.container_port
-  protocol    = "HTTP"
-  protocol_version = "HTTP1"
-  vpc_id      = aws_vpc.main.id
-  target_type = "ip"
-
-  health_check {
-    path                = "/"
-    protocol            = "HTTP"
-    healthy_threshold   = 3
-    unhealthy_threshold = 3
-    interval            = 30
-    timeout             = 5
-  }
-
-  tags = {
-    Name = "${var.project_name}-tg"
-  }
-}
-
-resource "aws_lb_listener" "http" {
-  load_balancer_arn = aws_lb.main.arn
-  port              = 80
-  protocol          = "HTTP"
-
-  default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.main.arn
-  }
+data "aws_wafv2_web_acl" "alb" {
+  name  = var.web_acl_name
+  scope = "REGIONAL"
 }
 
 resource "aws_ecr_repository" "nginx" {
-  name                 = "${var.project_name}/nginx"
-  image_tag_mutability = "MUTABLE"
+  name                 = var.ecr_repository_name
+  image_tag_mutability = var.ecr_image_tag_mutability
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
 
   encryption_configuration {
     encryption_type = "AES256"
   }
 
-  tags = {
-    Name = "${var.project_name}-ecr-nginx"
-  }
+  tags = local.common_tags
 }
 
 resource "aws_ecs_cluster" "main" {
-  name = "${var.project_name}-cluster"
+  name = var.ecs_cluster_name
+
+  configuration {
+    execute_command_configuration {
+      logging = "DEFAULT"
+    }
+  }
 
   setting {
     name  = "containerInsights"
-    value = "enabled"
+    value = var.container_insights
   }
 
-  tags = {
-    Name = "${var.project_name}-cluster"
-  }
+  tags = local.common_tags
 }
 
 resource "aws_cloudwatch_log_group" "nginx" {
-  name              = "/ecs/${var.project_name}-nginx"
-  retention_in_days = 14
-}
+  name              = var.log_group_name
+  retention_in_days = var.log_retention_in_days
 
-resource "aws_iam_role" "ecs_task_execution" {
-  name = "${var.project_name}-ecs-task-execution-role"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Effect = "Allow"
-        Principal = {
-          Service = "ecs-tasks.amazonaws.com"
-        }
-      }
-    ]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "ecs_task_execution" {
-  role       = aws_iam_role.ecs_task_execution.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+  tags = local.common_tags
 }
 
 resource "aws_ecs_task_definition" "nginx" {
-  family                   = "${var.project_name}-nginx"
-  requires_compatibilities  = ["FARGATE"]
-  network_mode              = "awsvpc"
-  cpu                        = var.task_cpu
-  memory                     = var.task_memory
-  execution_role_arn         = aws_iam_role.ecs_task_execution.arn
+  family                   = var.task_family
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = var.task_cpu
+  memory                   = var.task_memory
+  task_role_arn            = data.aws_iam_role.ecs_task_execution.arn
+  execution_role_arn       = data.aws_iam_role.ecs_task_execution.arn
+
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = "X86_64"
+  }
 
   container_definitions = jsonencode([
     {
@@ -260,45 +121,72 @@ resource "aws_ecs_task_definition" "nginx" {
 
       portMappings = [
         {
+          name          = "nginx-80-tcp"
           containerPort = var.container_port
+          hostPort      = var.container_port
           protocol      = "tcp"
+          appProtocol   = "http"
         }
       ]
 
       logConfiguration = {
         logDriver = "awslogs"
         options = {
+          "awslogs-create-group"  = "true"
           "awslogs-group"         = aws_cloudwatch_log_group.nginx.name
           "awslogs-region"        = var.aws_region
-          "awslogs-stream-prefix" = "nginx"
+          "awslogs-stream-prefix" = "ecs"
         }
       }
     }
   ])
 
-  tags = {
-    Name = "${var.project_name}-nginx-task"
-  }
+  tags = local.common_tags
 }
 
 resource "aws_ecs_service" "nginx" {
-  name            = "${var.project_name}-nginx-service"
+  name            = var.ecs_service_name
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.nginx.arn
   desired_count   = var.desired_count
-  launch_type     = "FARGATE"
+
+  capacity_provider_strategy {
+    capacity_provider = "FARGATE"
+    weight            = 1
+    base              = 0
+  }
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+
+  deployment_maximum_percent         = 200
+  deployment_minimum_healthy_percent = 100
+  availability_zone_rebalancing      = "ENABLED"
+  enable_ecs_managed_tags            = true
+  enable_execute_command             = true
+  health_check_grace_period_seconds  = 0
 
   network_configuration {
-    subnets          = aws_subnet.private[*].id
-    security_groups  = [aws_security_group.task.id]
-    assign_public_ip = false
+    subnets = [
+      data.aws_subnet.private_1.id,
+      data.aws_subnet.private_2.id
+    ]
+    security_groups  = [data.aws_security_group.task.id]
+    assign_public_ip = true
   }
 
   load_balancer {
-    target_group_arn = aws_lb_target_group.main.arn
-    container_name    = "nginx"
-    container_port    = var.container_port
+    target_group_arn = data.aws_lb_target_group.main.arn
+    container_name   = "nginx"
+    container_port   = var.container_port
   }
 
-  depends_on = [aws_lb_listener.http]
+  tags = local.common_tags
+}
+
+resource "aws_wafv2_web_acl_association" "alb" {
+  resource_arn = data.aws_lb.main.arn
+  web_acl_arn  = data.aws_wafv2_web_acl.alb.arn
 }

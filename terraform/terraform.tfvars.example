@@ -1,1 +1,1 @@
-container_image = "<account-id>.dkr.ecr.us-east-1.amazonaws.com/tf-container-build-platform/nginx:<tag>"
+container_image = "<account-id>.dkr.ecr.us-east-1.amazonaws.com/man-cbp/nginx:<tag>"

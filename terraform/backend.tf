@@ -10,7 +10,7 @@ terraform {
 
   backend "s3" {
     bucket       = "danielblakeman-container-build-platform-tfstate"
-    key          = "container-build-platform/terraform.tfstate"
+    key          = "man-cbp/terraform.tfstate"
     region       = "us-east-1"
     use_lockfile = true
   }
