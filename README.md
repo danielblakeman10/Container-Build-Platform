@@ -222,13 +222,10 @@ Each GitHub Environment should define:
 
 | Variable | Example |
 | --- | --- |
-| `ENV_NAME` | `dev`, `uat`, or `prod` |
 | `AWS_REGION` | `us-east-1` |
 | `AWS_ROLE_ARN` | `arn:aws:iam::866934333672:role/container-build-platform-dev-gha-role` |
-| `TF_STATE_KEY` | `man-cbp/dev/terraform.tfstate` |
-| `PROJECT_NAME` | `man-cbp-dev`, `man-cbp-uat`, or `man-cbp` |
 
-The workflow builds the immutable artifact into the existing shared ECR repository `man-cbp/nginx`, then passes that image URI into each environment. Keep the prod GitHub Environment `TF_STATE_KEY` set to `man-cbp/terraform.tfstate` unless you intentionally migrate the existing Terraform state.
+The workflow builds the immutable artifact into the existing shared ECR repository `man-cbp/nginx`, then passes that image URI into each environment. Terraform state keys and tfvars files are pinned in the workflow so prod always uses the existing `man-cbp/terraform.tfstate` state unless you intentionally migrate it.
 
 ### Recommended Workflow Separation
 

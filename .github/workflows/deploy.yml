@@ -116,10 +116,9 @@ jobs:
       - name: Terraform apply
         working-directory: terraform
         run: |
-          terraform init -reconfigure -backend-config="key=${{ vars.TF_STATE_KEY }}"
+          terraform init -reconfigure -backend-config="key=man-cbp/dev/terraform.tfstate"
           terraform apply -auto-approve \
-            -var-file="environments/${{ vars.ENV_NAME }}.tfvars" \
-            -var="project_name=${{ vars.PROJECT_NAME }}" \
+            -var-file="environments/dev.tfvars" \
             -var="container_image=${{ needs.build.outputs.image_uri }}"
 
   deploy-uat:
@@ -146,10 +145,9 @@ jobs:
       - name: Terraform apply
         working-directory: terraform
         run: |
-          terraform init -reconfigure -backend-config="key=${{ vars.TF_STATE_KEY }}"
+          terraform init -reconfigure -backend-config="key=man-cbp/uat/terraform.tfstate"
           terraform apply -auto-approve \
-            -var-file="environments/${{ vars.ENV_NAME }}.tfvars" \
-            -var="project_name=${{ vars.PROJECT_NAME }}" \
+            -var-file="environments/uat.tfvars" \
             -var="container_image=${{ needs.build.outputs.image_uri }}"
 
   deploy-prod:
@@ -176,8 +174,7 @@ jobs:
       - name: Terraform apply
         working-directory: terraform
         run: |
-          terraform init -reconfigure -backend-config="key=${{ vars.TF_STATE_KEY }}"
+          terraform init -reconfigure -backend-config="key=man-cbp/terraform.tfstate"
           terraform apply -auto-approve \
-            -var-file="environments/${{ vars.ENV_NAME }}.tfvars" \
-            -var="project_name=${{ vars.PROJECT_NAME }}" \
+            -var-file="environments/prod.tfvars" \
             -var="container_image=${{ needs.build.outputs.image_uri }}"

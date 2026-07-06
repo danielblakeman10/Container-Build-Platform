@@ -136,7 +136,7 @@ Explain the workflow in order:
 | ECR login | Uses `aws-actions/amazon-ecr-login@v2`. | Authenticates Docker to push into private ECR. |
 | Docker build | Builds the image from `./nginx`. | Creates the deployable container artifact. |
 | Image tag | Tags the image with `${{ github.sha }}`. | Creates immutable traceability from running image to source commit. |
-| Terraform init | Initializes backend with `TF_STATE_KEY` from the active GitHub Environment. | Keeps dev, uat, and prod state isolated. |
+| Terraform init | Initializes backend with the state key pinned for the target stage. | Keeps dev, uat, and prod state isolated. |
 | Terraform apply | Applies with the environment tfvars file and `container_image=<new-image-uri>`. | Updates AWS infra and the ECS task definition. |
 | Promotion | Runs dev first, then uat, then prod. | Promotes the same image URI instead of rebuilding for each environment. |
 
