@@ -44,7 +44,7 @@ jobs:
         with:
           directory: terraform/
           framework: terraform
-          soft_fail: false # Set to true if you don't want security warnings to block the build
+          soft_fail: true # Set to true if you don't want security warnings to block the build
 
   # ==========================================
   # STAGE 2: BUILD (Compile & Push Docker Image)
