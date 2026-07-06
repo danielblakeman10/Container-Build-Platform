@@ -124,7 +124,7 @@ jobs:
 
   deploy-uat:
     name: Promote to uat
-    needs: deploy-dev
+    needs: [build, deploy-dev]
     runs-on: ubuntu-latest
     environment:
       name: uat
@@ -154,7 +154,7 @@ jobs:
 
   deploy-prod:
     name: Promote to prod
-    needs: deploy-uat
+    needs: [build, deploy-uat]
     runs-on: ubuntu-latest
     environment:
       name: prod
