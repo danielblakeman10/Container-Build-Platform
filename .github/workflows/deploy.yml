@@ -13,15 +13,47 @@ on:
 permissions:
   id-token: write
   contents: read
+  security-events: write # Required for Checkov to upload reports if needed
 
 env:
   AWS_REGION: us-east-1
   ECR_REPOSITORY: man-cbp/nginx
 
 jobs:
-  deploy:
+  # ==========================================
+  # STAGE 1: DEV CHECKS (Formatting & IaC Security)
+  # ==========================================
+  dev-checks:
     runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.7
+
+      - name: Terraform Format Check
+        working-directory: terraform
+        run: terraform fmt -check
+
+      # Security Scan: Checks Terraform files for misconfigurations (e.g. open ports, unencrypted volumes)
+      - name: Run Checkov Static Code Analysis
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: terraform/
+          framework: terraform
+          soft_fail: false # Set to true if you don't want security warnings to block the build
+
+  # ==========================================
+  # STAGE 2: BUILD (Compile & Push Docker Image)
+  # ==========================================
+  build:
+    needs: dev-checks
+    runs-on: ubuntu-latest
+    outputs:
+      image_uri: ${{ steps.build-image.outputs.IMAGE_URI }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -37,18 +69,74 @@ jobs:
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Build, tag, and push image
+        id: build-image
         env:
           ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG ./nginx
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          echo "IMAGE_URI=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> "$GITHUB_ENV"
+          echo "IMAGE_URI=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+
+  # ==========================================
+  # STAGE 3: TEST (Validation & Container Security)
+  # ==========================================
+  test:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Install Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.15.7
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::866934333672:role/container-build-platform-gha-role
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform init
+        working-directory: terraform
+        run: terraform init
+
+      - name: Terraform validate
+        working-directory: terraform
+        run: terraform validate
+
+      # Security Scan: Pulls and checks the freshly built Docker image for OS/software bugs
+      - name: Run Trivy Container Vulnerability Scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ needs.build.outputs.image_uri }}
+          format: 'table'
+          exit-code: '1' # Fails the workflow job if 'CRITICAL' items are found
+          ignore-unfixed: true
+          severity: 'CRITICAL,HIGH'
+
+  # ==========================================
+  # STAGE 4: DEPLOY (Active Deployment to AWS)
+  # ==========================================
+  deploy:
+    needs: [build, test]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.7
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::866934333672:role/container-build-platform-gha-role
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Terraform init
         working-directory: terraform
@@ -56,4 +144,4 @@ jobs:
 
       - name: Terraform apply
         working-directory: terraform
-        run: terraform apply -auto-approve -var="container_image=${{ env.IMAGE_URI }}"
+        run: terraform apply -auto-approve -var="container_image=${{ needs.build.outputs.image_uri }}"
