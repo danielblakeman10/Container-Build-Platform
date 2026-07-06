@@ -1,54 +1,306 @@
-data "aws_vpc" "main" {
+data "aws_availability_zones" "available" {
+  state = "available"
+}
+
+data "aws_vpc" "existing" {
+  count = var.use_existing_network ? 1 : 0
+
   filter {
     name   = "tag:Name"
     values = [var.vpc_name]
   }
 }
 
-data "aws_subnet" "public_1" {
+data "aws_subnet" "existing_public_1" {
+  count = var.use_existing_network ? 1 : 0
+
   filter {
     name   = "tag:Name"
     values = ["${var.project_name}-subnet-public1-us-east-1a"]
   }
 }
 
-data "aws_subnet" "public_2" {
+data "aws_subnet" "existing_public_2" {
+  count = var.use_existing_network ? 1 : 0
+
   filter {
     name   = "tag:Name"
     values = ["${var.project_name}-subnet-public2-us-east-1b"]
   }
 }
 
-data "aws_subnet" "private_1" {
+data "aws_subnet" "existing_private_1" {
+  count = var.use_existing_network ? 1 : 0
+
   filter {
     name   = "tag:Name"
     values = ["${var.project_name}-subnet-private1-us-east-1a"]
   }
 }
 
-data "aws_subnet" "private_2" {
+data "aws_subnet" "existing_private_2" {
+  count = var.use_existing_network ? 1 : 0
+
   filter {
     name   = "tag:Name"
     values = ["${var.project_name}-subnet-private2-us-east-1b"]
   }
 }
 
-data "aws_security_group" "alb" {
+data "aws_security_group" "existing_alb" {
+  count = var.use_existing_network ? 1 : 0
+
   name   = var.alb_security_group_name
-  vpc_id = data.aws_vpc.main.id
+  vpc_id = data.aws_vpc.existing[0].id
 }
 
-data "aws_security_group" "task" {
+data "aws_security_group" "existing_task" {
+  count = var.use_existing_network ? 1 : 0
+
   name   = var.task_security_group_name
-  vpc_id = data.aws_vpc.main.id
+  vpc_id = data.aws_vpc.existing[0].id
 }
 
-data "aws_lb" "main" {
+data "aws_lb" "existing" {
+  count = var.use_existing_network ? 1 : 0
+
   name = var.alb_name
 }
 
-data "aws_lb_target_group" "main" {
+data "aws_lb_target_group" "existing" {
+  count = var.use_existing_network ? 1 : 0
+
   name = var.target_group_name
+}
+
+resource "aws_vpc" "main" {
+  count = var.use_existing_network ? 0 : 1
+
+  cidr_block           = var.vpc_cidr
+  enable_dns_hostnames = true
+  enable_dns_support   = true
+
+  tags = merge(local.common_tags, {
+    Name = var.vpc_name
+  })
+}
+
+resource "aws_internet_gateway" "main" {
+  count = var.use_existing_network ? 0 : 1
+
+  vpc_id = aws_vpc.main[0].id
+
+  tags = merge(local.common_tags, {
+    Name = "${var.project_name}-igw"
+  })
+}
+
+resource "aws_subnet" "public" {
+  count = var.use_existing_network ? 0 : length(local.availability_zones)
+
+  vpc_id                  = aws_vpc.main[0].id
+  cidr_block              = cidrsubnet(var.vpc_cidr, 4, count.index)
+  availability_zone       = local.availability_zones[count.index]
+  map_public_ip_on_launch = true
+
+  tags = merge(local.common_tags, {
+    Name = "${var.project_name}-public-${count.index + 1}"
+    Tier = "public"
+  })
+}
+
+resource "aws_subnet" "private" {
+  count = var.use_existing_network ? 0 : length(local.availability_zones)
+
+  vpc_id            = aws_vpc.main[0].id
+  cidr_block        = cidrsubnet(var.vpc_cidr, 4, count.index + 8)
+  availability_zone = local.availability_zones[count.index]
+
+  tags = merge(local.common_tags, {
+    Name = "${var.project_name}-private-${count.index + 1}"
+    Tier = "private"
+  })
+}
+
+resource "aws_eip" "nat" {
+  count = var.use_existing_network || !var.create_nat_gateway ? 0 : 1
+
+  domain = "vpc"
+
+  tags = merge(local.common_tags, {
+    Name = "${var.project_name}-nat-eip"
+  })
+}
+
+resource "aws_nat_gateway" "main" {
+  count = var.use_existing_network || !var.create_nat_gateway ? 0 : 1
+
+  allocation_id = aws_eip.nat[0].id
+  subnet_id     = aws_subnet.public[0].id
+
+  tags = merge(local.common_tags, {
+    Name = "${var.project_name}-nat"
+  })
+
+  depends_on = [aws_internet_gateway.main]
+}
+
+resource "aws_route_table" "public" {
+  count = var.use_existing_network ? 0 : 1
+
+  vpc_id = aws_vpc.main[0].id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.main[0].id
+  }
+
+  tags = merge(local.common_tags, {
+    Name = "${var.project_name}-public-rt"
+  })
+}
+
+resource "aws_route_table_association" "public" {
+  count = var.use_existing_network ? 0 : length(aws_subnet.public)
+
+  subnet_id      = aws_subnet.public[count.index].id
+  route_table_id = aws_route_table.public[0].id
+}
+
+resource "aws_route_table" "private" {
+  count = var.use_existing_network ? 0 : 1
+
+  vpc_id = aws_vpc.main[0].id
+
+  dynamic "route" {
+    for_each = var.create_nat_gateway ? [1] : []
+
+    content {
+      cidr_block     = "0.0.0.0/0"
+      nat_gateway_id = aws_nat_gateway.main[0].id
+    }
+  }
+
+  tags = merge(local.common_tags, {
+    Name = "${var.project_name}-private-rt"
+  })
+}
+
+resource "aws_route_table_association" "private" {
+  count = var.use_existing_network ? 0 : length(aws_subnet.private)
+
+  subnet_id      = aws_subnet.private[count.index].id
+  route_table_id = aws_route_table.private[0].id
+}
+
+resource "aws_security_group" "alb" {
+  count = var.use_existing_network ? 0 : 1
+
+  name        = var.alb_security_group_name
+  description = "Allow public HTTP access to the ALB"
+  vpc_id      = aws_vpc.main[0].id
+
+  ingress {
+    description = "HTTP from internet"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = var.allowed_http_cidr_blocks
+  }
+
+  egress {
+    description = "All outbound"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = merge(local.common_tags, {
+    Name = var.alb_security_group_name
+  })
+}
+
+resource "aws_security_group" "task" {
+  count = var.use_existing_network ? 0 : 1
+
+  name        = var.task_security_group_name
+  description = "Allow ALB traffic to ECS tasks"
+  vpc_id      = aws_vpc.main[0].id
+
+  ingress {
+    description     = "HTTP from ALB"
+    from_port       = var.container_port
+    to_port         = var.container_port
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb[0].id]
+  }
+
+  egress {
+    description = "All outbound"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = merge(local.common_tags, {
+    Name = var.task_security_group_name
+  })
+}
+
+resource "aws_lb" "main" {
+  count = var.use_existing_network ? 0 : 1
+
+  name               = var.alb_name
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [local.alb_security_group_id]
+  subnets            = local.public_subnet_ids
+
+  enable_deletion_protection = var.alb_deletion_protection
+
+  tags = merge(local.common_tags, {
+    Name = var.alb_name
+  })
+}
+
+resource "aws_lb_target_group" "main" {
+  count = var.use_existing_network ? 0 : 1
+
+  name        = var.target_group_name
+  port        = var.container_port
+  protocol    = "HTTP"
+  target_type = "ip"
+  vpc_id      = local.vpc_id
+
+  health_check {
+    enabled             = true
+    healthy_threshold   = 2
+    interval            = 30
+    matcher             = "200-399"
+    path                = "/"
+    protocol            = "HTTP"
+    timeout             = 5
+    unhealthy_threshold = 2
+  }
+
+  tags = merge(local.common_tags, {
+    Name = var.target_group_name
+  })
+}
+
+resource "aws_lb_listener" "http" {
+  count = var.use_existing_network ? 0 : 1
+
+  load_balancer_arn = aws_lb.main[0].arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.main[0].arn
+  }
 }
 
 resource "aws_ecr_repository" "nginx" {
@@ -160,24 +412,25 @@ resource "aws_ecs_service" "nginx" {
   health_check_grace_period_seconds  = 0
 
   network_configuration {
-    subnets = [
-      data.aws_subnet.private_1.id,
-      data.aws_subnet.private_2.id
-    ]
-    security_groups  = [data.aws_security_group.task.id]
-    assign_public_ip = true
+    subnets          = local.private_subnet_ids
+    security_groups  = [local.task_security_group_id]
+    assign_public_ip = var.assign_public_ip
   }
 
   load_balancer {
-    target_group_arn = data.aws_lb_target_group.main.arn
+    target_group_arn = local.target_group_arn
     container_name   = "nginx"
     container_port   = var.container_port
   }
+
+  depends_on = [aws_lb_listener.http]
 
   tags = local.common_tags
 }
 
 resource "aws_wafv2_web_acl_association" "alb" {
-  resource_arn = data.aws_lb.main.arn
+  count = var.web_acl_arn == "" ? 0 : 1
+
+  resource_arn = local.alb_arn
   web_acl_arn  = var.web_acl_arn
 }

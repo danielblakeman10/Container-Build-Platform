@@ -1,6 +1,6 @@
 output "alb_dns_name" {
   description = "Public DNS name of the ALB"
-  value       = data.aws_lb.main.dns_name
+  value       = local.alb_dns_name
 }
 
 output "ecr_repository_url" {
@@ -20,5 +20,5 @@ output "ecs_service_name" {
 
 output "waf_web_acl_name" {
   description = "Regional AWS WAF Web ACL associated with the ALB"
-  value       = var.web_acl_name
+  value       = var.web_acl_name == "" ? "not-associated" : var.web_acl_name
 }

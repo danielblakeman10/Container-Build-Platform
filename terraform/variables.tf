@@ -1,7 +1,15 @@
 variable "project_name" {
-  description = "Canonical project prefix for the live demo resources"
+  description = "Canonical project prefix for the target environment"
   type        = string
-  default     = "man-cbp"
+}
+
+variable "environment" {
+  description = "Deployment environment name"
+  type        = string
+  validation {
+    condition     = contains(["dev", "uat", "prod"], var.environment)
+    error_message = "Environment must be one of: dev, uat, prod."
+  }
 }
 
 variable "aws_region" {
@@ -10,64 +18,90 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
-variable "vpc_name" {
-  description = "Existing VPC name used by the live demo stack"
+variable "use_existing_network" {
+  description = "Use pre-existing VPC, subnets, security groups, ALB, and target group instead of creating them"
+  type        = bool
+  default     = false
+}
+
+variable "vpc_cidr" {
+  description = "CIDR block for newly created non-production VPCs"
   type        = string
-  default     = "man-cbp-vpc"
+  default     = "10.0.0.0/16"
+}
+
+variable "availability_zones" {
+  description = "Availability zones for newly created non-production subnets. Leave empty to use the first two available AZs."
+  type        = list(string)
+  default     = []
+}
+
+variable "create_nat_gateway" {
+  description = "Create a single NAT Gateway for private subnet egress in newly created environments"
+  type        = bool
+  default     = true
+}
+
+variable "allowed_http_cidr_blocks" {
+  description = "CIDR blocks allowed to reach newly created ALBs over HTTP"
+  type        = list(string)
+  default     = ["0.0.0.0/0"]
+}
+
+variable "alb_deletion_protection" {
+  description = "Enable deletion protection on newly created ALBs"
+  type        = bool
+  default     = false
+}
+
+variable "vpc_name" {
+  description = "VPC name for the target environment"
+  type        = string
 }
 
 variable "alb_name" {
-  description = "Existing public ALB name used by the live demo"
+  description = "Public ALB name for the target environment"
   type        = string
-  default     = "man-cbp-alb"
 }
 
 variable "target_group_name" {
-  description = "Existing ALB target group used by the ECS service"
+  description = "ALB target group name for the ECS service"
   type        = string
-  default     = "man-cbp-vpc"
 }
 
 variable "alb_security_group_name" {
-  description = "Existing ALB security group name"
+  description = "ALB security group name"
   type        = string
-  default     = "man-cbpo-alb-sg"
 }
 
 variable "task_security_group_name" {
-  description = "Existing ECS task security group name"
+  description = "ECS task security group name"
   type        = string
-  default     = "man-cbp-task-sg"
 }
 
 variable "ecr_repository_name" {
   description = "ECR repository that stores the NGINX image"
   type        = string
-  default     = "man-cbp/nginx"
 }
 
 variable "ecs_cluster_name" {
-  description = "ECS cluster hosting the live demo service"
+  description = "ECS cluster hosting the service"
   type        = string
-  default     = "man-cbp-cluster"
 }
 
 variable "ecs_service_name" {
   description = "ECS service managing the NGINX Fargate task"
   type        = string
-  default     = "man-cbp-nginx-service"
 }
 
 variable "task_family" {
   description = "ECS task definition family"
   type        = string
-  default     = "man-cbp-nginx"
 }
 
 variable "log_group_name" {
   description = "CloudWatch Logs group used by the NGINX task"
   type        = string
-  default     = "/ecs/man-cbp-nginx"
 }
 
 variable "log_retention_in_days" {
@@ -77,15 +111,15 @@ variable "log_retention_in_days" {
 }
 
 variable "web_acl_name" {
-  description = "Regional AWS WAF Web ACL associated with the demo ALB"
+  description = "Regional AWS WAF Web ACL associated with the ALB"
   type        = string
-  default     = "dcb-container-build-platform-waf"
+  default     = ""
 }
 
 variable "web_acl_arn" {
-  description = "Regional AWS WAF Web ACL ARN associated with the demo ALB"
+  description = "Regional AWS WAF Web ACL ARN associated with the ALB. Leave empty when WAF is not attached."
   type        = string
-  default     = "arn:aws:wafv2:us-east-1:866934333672:regional/webacl/dcb-container-build-platform-waf/454483ac-e0cf-4ccf-950d-978b492cd69a"
+  default     = ""
 }
 
 variable "ecs_task_execution_role_arn" {
@@ -121,6 +155,12 @@ variable "desired_count" {
   description = "Number of task replicas the service should run"
   type        = number
   default     = 1
+}
+
+variable "assign_public_ip" {
+  description = "Assign public IP addresses to ECS tasks"
+  type        = bool
+  default     = false
 }
 
 variable "container_insights" {

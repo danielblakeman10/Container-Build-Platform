@@ -85,7 +85,7 @@ Key files to mention:
 | `.github/workflows/oidc-debug.yml` | Manual workflow to verify GitHub-to-AWS OIDC federation. |
 | `nginx/Dockerfile` | Defines the container image. |
 | `nginx/app/index.html` | Simple demo workload served by NGINX. |
-| `terraform/main.tf` | Looks up existing `man-cbp` network and ALB resources, then manages the ECS delivery path, ECR, logs, and WAF association. |
+| `terraform/main.tf` | Creates isolated dev/uat stacks, uses existing prod `man-cbp` network and ALB resources, then manages the ECS delivery path, ECR, logs, and WAF association. |
 | `terraform/backend.tf` | Configures Terraform version, AWS provider, and S3 remote backend. |
 | `terraform/terraform.tfvars.example` | Safe placeholder showing expected runtime variable format. |
 
@@ -130,19 +130,20 @@ Explain the workflow in order:
 
 | Stage | What happens | Why it matters |
 | --- | --- | --- |
-| Trigger | Runs on push to `main` or manual `workflow_dispatch`. | Supports automated and operator-triggered deployments. |
+| Trigger | Runs on push to `dev` or manual `workflow_dispatch`. | Supports automated and operator-triggered promotion through dev, uat, and prod. |
 | Permissions | Grants `id-token: write` and `contents: read`. | Enables OIDC federation without static AWS keys. |
 | AWS credentials | Uses `aws-actions/configure-aws-credentials@v4`. | Exchanges GitHub identity for short-lived AWS credentials. |
 | ECR login | Uses `aws-actions/amazon-ecr-login@v2`. | Authenticates Docker to push into private ECR. |
 | Docker build | Builds the image from `./nginx`. | Creates the deployable container artifact. |
 | Image tag | Tags the image with `${{ github.sha }}`. | Creates immutable traceability from running image to source commit. |
-| Terraform init | Initializes backend and providers. | Prepares Terraform to use remote state. |
-| Terraform apply | Applies with `container_image=<new-image-uri>`. | Updates AWS infra and the ECS task definition. |
+| Terraform init | Initializes backend with `TF_STATE_KEY` from the active GitHub Environment. | Keeps dev, uat, and prod state isolated. |
+| Terraform apply | Applies with the environment tfvars file and `container_image=<new-image-uri>`. | Updates AWS infra and the ECS task definition. |
+| Promotion | Runs dev first, then uat, then prod. | Promotes the same image URI instead of rebuilding for each environment. |
 
 Presenter explanation:
 
 ```text
-The deployment pipeline builds a new image on every main branch push, pushes it to ECR with the commit SHA, and passes that exact image URI into Terraform. That gives us traceability from Git commit to deployed ECS task definition.
+The deployment pipeline builds a new image on every dev branch push, pushes it to ECR with the commit SHA, and passes that exact image URI into Terraform. Dev, uat, and prod receive the same artifact, which gives us traceability from Git commit to deployed ECS task definition.
 ```
 
 ## 5. Explain OIDC Role Assumption
@@ -158,7 +159,7 @@ permissions:
 And:
 
 ```yaml
-role-to-assume: arn:aws:iam::866934333672:role/container-build-platform-gha-role
+role-to-assume: ${{ vars.AWS_ROLE_ARN }}
 ```
 
 Presenter explanation:
@@ -212,15 +213,15 @@ Walk through the resources in this order:
 
 | Area | Terraform resources | Explanation |
 | --- | --- | --- |
-| VPC foundation | `data.aws_vpc.main` | Looks up the existing `man-cbp-vpc`. |
-| Subnets | `data.aws_subnet.*` | Uses the existing public and private `man-cbp` subnets. |
-| Security groups | `data.aws_security_group.alb`, `data.aws_security_group.task` | Uses the existing ALB and task security groups. |
-| Load balancing | `data.aws_lb.main`, `data.aws_lb_target_group.main` | Uses the existing ALB and target group. |
+| VPC foundation | `aws_vpc.main` or `data.aws_vpc.existing` | Creates dev/uat VPCs and looks up the existing prod `man-cbp-vpc`. |
+| Subnets | `aws_subnet.*` or `data.aws_subnet.*` | Creates dev/uat public/private subnets and uses existing prod subnets. |
+| Security groups | `aws_security_group.*` or `data.aws_security_group.*` | Creates dev/uat ALB/task security groups and uses existing prod groups. |
+| Load balancing | `aws_lb.*` or `data.aws_lb.existing` | Creates dev/uat ALBs and target groups; prod uses `man-cbp-alb`. |
 | Registry | `aws_ecr_repository.nginx` | Stores the container image pushed by CI/CD. |
 | Compute | `aws_ecs_cluster`, `aws_ecs_task_definition`, `aws_ecs_service` | Runs the NGINX container on Fargate. |
-| IAM | `data.aws_iam_role.ecs_task_execution` | Uses the existing ECS task execution role. |
+| IAM | `ecs_task_execution_role_arn` variable | Uses the existing ECS task execution role. |
 | Observability | `aws_cloudwatch_log_group.nginx` | Centralizes task logs with retention. |
-| Edge security | `aws_wafv2_web_acl_association.alb` | Keeps the regional Web ACL associated with the live ALB. |
+| Edge security | `aws_wafv2_web_acl_association.alb` | Keeps the regional Web ACL associated with the prod ALB when `web_acl_arn` is set. |
 
 Presenter explanation:
 
@@ -258,12 +259,12 @@ In GitHub:
 Repository -> Actions -> Deploy nginx to Fargate -> Run workflow
 ```
 
-Or explain that a push to `main` triggers it automatically.
+Or explain that a push to `dev` triggers the promotion pipeline automatically.
 
 Presenter explanation:
 
 ```text
-This workflow represents the deployment control plane. A push to main creates a new image, pushes it to ECR, and updates the ECS service using Terraform.
+This workflow represents the deployment control plane. A push to dev creates a new image, pushes it to ECR, deploys dev, waits at the uat/prod GitHub Environment gates if configured, and updates each ECS service using Terraform.
 ```
 
 If you do not want to trigger a fresh deployment during the demo, open the latest successful run and walk through the completed steps.

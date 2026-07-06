@@ -2,7 +2,7 @@
 
 Container Build Platform is a reference DevSecOps deployment pattern for building a container image from GitHub, publishing it to Amazon ECR, and deploying it to Amazon ECS on AWS Fargate behind a public Application Load Balancer.
 
-The repository demonstrates a production-shaped control plane: GitHub Actions uses AWS OIDC federation instead of long-lived access keys, Docker builds an NGINX workload, Terraform adopts and manages the live `man-cbp` ECS delivery path, and ECS runs the container behind an ALB protected by AWS WAF.
+The repository demonstrates a production-shaped control plane: GitHub Actions uses AWS OIDC federation instead of long-lived access keys, Docker builds an NGINX workload, Terraform manages dev, uat, and prod ECS delivery paths, and the prod `man-cbp` service runs behind an ALB protected by AWS WAF.
 
 ## What This Demonstrates
 
@@ -54,7 +54,7 @@ The repository demonstrates a production-shaped control plane: GitHub Actions us
 
 ```mermaid
 flowchart TD
-    Dev[Developer pushes to main or runs workflow_dispatch] --> GH[GitHub Repository]
+    Dev[Developer pushes to dev or runs workflow_dispatch] --> GH[GitHub Repository]
     GH --> GHA[GitHub Actions deploy workflow]
     GHA --> OIDC[GitHub OIDC token]
     OIDC --> IAM[AWS IAM role assumption]
@@ -62,9 +62,11 @@ flowchart TD
     ECRLogin --> Build[Docker build nginx image]
     Build --> Tag[Tag image with Git SHA]
     Tag --> Push[Push image to Amazon ECR]
-    Push --> TFInit[Terraform init using S3 backend]
-    TFInit --> TFApply[Terraform apply with container_image override]
-    TFApply --> ECSUpdate[ECS task definition and service update]
+    Push --> TFInit[Terraform init using environment state key]
+    TFInit --> DevApply[Terraform apply dev]
+    DevApply --> UATApply[Promote same image to uat]
+    UATApply --> ProdApply[Promote same image to prod]
+    ProdApply --> ECSUpdate[ECS task definition and service update]
     ECSUpdate --> Fargate[ECS Fargate task launches in private subnet]
     User[End user] --> ALB[Public Application Load Balancer]
     ALB --> TG[ALB target group]
@@ -157,15 +159,15 @@ flowchart TB
 
 ## Deployment Flow
 
-1. A commit is pushed to `main`, or the `Deploy nginx to Fargate` workflow is manually triggered.
+1. A commit is pushed to `dev`, or the `Deploy nginx to Fargate` workflow is manually triggered.
 2. GitHub Actions requests an OIDC token and assumes the AWS deployment role.
 3. The workflow logs in to Amazon ECR.
 4. Docker builds the image from `nginx/Dockerfile`.
 5. The image is tagged with the Git commit SHA and pushed to ECR.
-6. Terraform initializes against the S3 backend.
-7. Terraform imports/adopts the `man-cbp` managed resources when needed, applies infrastructure changes, and injects the new image URI into the ECS task definition.
-8. ECS launches the updated NGINX task on Fargate in private subnets.
-9. Public users reach the service through the ALB DNS name.
+6. Terraform initializes against the environment-specific S3 backend key from the GitHub Environment variable `TF_STATE_KEY`.
+7. Terraform applies dev first, then promotes the same image URI through uat and prod.
+8. Dev and uat create isolated environment stacks, while prod updates the existing `man-cbp` stack and WAF-protected ALB.
+9. ECS launches the updated NGINX task on Fargate and public users reach the service through the ALB DNS name.
 
 ## CI/CD Operating Model
 
@@ -177,10 +179,10 @@ This operating model follows the same production-style structure used in larger 
 | --- | --- | --- |
 | Keyless AWS access | GitHub Actions assumes AWS IAM roles through OIDC. | Scope trust policies by repository, branch, environment, and workflow. |
 | Immutable deploy artifact | Images are tagged with the Git commit SHA. | Promote the same digest across dev, UAT, and production instead of rebuilding. |
-| Infrastructure as code | Terraform adopts the live `man-cbp` ECR, ECS, CloudWatch, and WAF association while looking up existing network and ALB resources. | Split networking, platform, and application stacks into separate state files or modules. |
-| Remote state | Terraform uses an S3 backend. | Centralize state in a tooling account with encryption, versioning, least-privilege access, and locking. |
-| Environment control | `main` deploys the current stack. | Map `develop`, `uat`, and `main` to separate AWS accounts or isolated environments. |
-| Approval control | Manual `workflow_dispatch` is available. | Require protected GitHub Environments and approval gates before production apply. |
+| Infrastructure as code | Terraform creates isolated dev and uat stacks and updates the existing prod `man-cbp` stack. | Split networking, platform, and application stacks into separate state files or modules. |
+| Remote state | Terraform uses an S3 backend with one state key per GitHub Environment. | Centralize state in a tooling account with encryption, versioning, least-privilege access, and locking. |
+| Environment control | The workflow promotes in order: dev -> uat -> prod. | Move each environment into separate AWS accounts when the platform matures. |
+| Approval control | GitHub Environments can gate uat and prod before `terraform apply`. | Require protected GitHub Environments and approval gates before production apply. |
 | Runtime isolation | ECS task ingress is restricted to the ALB security group. | Disable task public IP assignment, add VPC endpoints, private image pulls, HTTPS-only ingress, and environment-specific CIDRs. |
 
 ### Pipeline Stages
@@ -191,13 +193,12 @@ flowchart LR
     Validate --> Auth[Assume AWS role through OIDC]
     Auth --> Build[Build Docker image]
     Build --> Publish[Push image to ECR with Git SHA tag]
-    Publish --> Plan[Terraform init and plan]
-    Plan --> Gate{Approval required?}
-    Gate -->|Non-production| Apply[Terraform apply]
-    Gate -->|Production| Approval[Protected environment approval]
-    Approval --> Apply
-    Apply --> Deploy[ECS service deployment]
-    Deploy --> Verify[ALB, ECS, and CloudWatch verification]
+    Publish --> Dev[Apply dev]
+    Dev --> UATGate[UAT environment approval]
+    UATGate --> UAT[Apply uat]
+    UAT --> ProdGate[Prod environment approval]
+    ProdGate --> Prod[Apply prod]
+    Prod --> Verify[ALB, ECS, and CloudWatch verification]
 ```
 
 ### Current Workflow Responsibilities
@@ -205,17 +206,29 @@ flowchart LR
 | Workflow | Trigger | Responsibility | AWS role target |
 | --- | --- | --- | --- |
 | `.github/workflows/oidc-debug.yml` | Manual only | Validates GitHub-to-AWS OIDC trust by running `aws sts get-caller-identity`. | `GitHubActionsOIDCRole` |
-| `.github/workflows/deploy.yml` | Push to `main` or manual dispatch | Builds the NGINX image, pushes to ECR, initializes Terraform, and applies the ECS/Fargate stack. | `container-build-platform-gha-role` |
+| `.github/workflows/deploy.yml` | Push to `dev` or manual dispatch | Builds the NGINX image once, pushes it to ECR, then applies dev, uat, and prod using GitHub Environment-scoped OIDC roles and Terraform state keys. | `container-build-platform-dev-gha-role`, `container-build-platform-uat-gha-role`, `container-build-platform-prod-gha-role` |
 
-### Recommended Environment Promotion Model
+### Environment Promotion Model
 
-The current repository deploys from `main`. For a stronger demonstration, extend it to this branch-to-environment model:
+The repository is configured for a sequential GitHub Environment promotion model:
 
-| Branch | Environment | AWS account or isolation boundary | Terraform state key | Deployment control |
+| Source | Environment | AWS isolation boundary | Terraform state key | Deployment control |
 | --- | --- | --- | --- | --- |
-| `develop` | Dev | Dev account or dev VPC | `container-build-platform/dev/terraform.tfstate` | Automatic apply after validation. |
-| `uat` | UAT | UAT account or UAT VPC | `container-build-platform/uat/terraform.tfstate` | Manual approval or release-manager approval. |
-| `main` | Production | Production account or production VPC | `container-build-platform/production/terraform.tfstate` | Protected GitHub Environment with required approval. |
+| `dev` branch or manual run | Dev | Dedicated dev VPC and ECS stack | `man-cbp/dev/terraform.tfstate` | Automatic apply after validation. |
+| Promotion after dev | UAT | Dedicated uat VPC and ECS stack | `man-cbp/uat/terraform.tfstate` | GitHub Environment approval recommended. |
+| Promotion after uat | Prod | Existing `man-cbp` VPC, ALB, ECS, ECR, CloudWatch, and WAF association | `man-cbp/terraform.tfstate` | Protected GitHub Environment approval recommended. |
+
+Each GitHub Environment should define:
+
+| Variable | Example |
+| --- | --- |
+| `ENV_NAME` | `dev`, `uat`, or `prod` |
+| `AWS_REGION` | `us-east-1` |
+| `AWS_ROLE_ARN` | `arn:aws:iam::866934333672:role/container-build-platform-dev-gha-role` |
+| `TF_STATE_KEY` | `man-cbp/dev/terraform.tfstate` |
+| `PROJECT_NAME` | `man-cbp-dev`, `man-cbp-uat`, or `man-cbp` |
+
+The workflow builds the immutable artifact into the existing shared ECR repository `man-cbp/nginx`, then passes that image URI into each environment. Keep the prod GitHub Environment `TF_STATE_KEY` set to `man-cbp/terraform.tfstate` unless you intentionally migrate the existing Terraform state.
 
 ### Recommended Workflow Separation
 
@@ -230,7 +243,7 @@ For a production-grade version, split the current deployment flow into three wor
 ### Governance and Control Points
 
 - Pull requests should run `terraform fmt -check`, `terraform validate`, Docker build validation, and IaC/container security scans before merge.
-- `main` should be protected with required reviews and passing checks before the deployment workflow can run from trusted code.
+- `dev`, `uat`, and `prod` should be protected according to the promotion model, with uat and prod using GitHub Environment approvals.
 - Production applies should use GitHub Environments with required reviewers.
 - The AWS deployment role should be scoped to the repository subject claim and should avoid wildcarding all repositories in the GitHub organization.
 - ECR pushes should use Git SHA tags; production should deploy by immutable image digest where possible.
@@ -299,14 +312,14 @@ permissions:
   contents: read
 ```
 
-For a locked-down trust policy, scope the role to this repository and branch:
+For locked-down trust policies, scope each role to this repository and the matching GitHub Environment:
 
 ```json
 {
   "Condition": {
     "StringEquals": {
       "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-      "token.actions.githubusercontent.com:sub": "repo:danielblakeman10/Container-Build-Platform:ref:refs/heads/main"
+      "token.actions.githubusercontent.com:sub": "repo:danielblakeman10/Container-Build-Platform:environment:prod"
     }
   }
 }
@@ -346,7 +359,7 @@ terraform plan -var="container_image=<account-id>.dkr.ecr.us-east-1.amazonaws.co
 2. Open `.github/workflows/deploy.yml` and explain the OIDC role assumption, ECR login, image build, and Terraform apply stages.
 3. Open `terraform/main.tf` and walk through the VPC, ALB, ECR, ECS, IAM, and CloudWatch resources.
 4. Trigger the `oidc-debug.yml` workflow to prove AWS federation with `aws sts get-caller-identity`.
-5. Trigger the deployment workflow or push to `main`.
+5. Trigger the deployment workflow or push to `dev`.
 6. Confirm the ECR image was pushed using the Git SHA tag.
 7. Confirm the ECS service deployment stabilized.
 8. Open the Terraform `alb_dns_name` output in a browser and verify the NGINX page responds.
@@ -416,7 +429,7 @@ The platform is intentionally small, but it still demonstrates real FinOps trade
 - Replace single NAT Gateway with one NAT Gateway per AZ if higher availability is required.
 - Add VPC endpoints for ECR, CloudWatch Logs, and S3 to reduce NAT dependency and egress cost.
 - Split Terraform into modules when the project grows beyond a single service.
-- Add Terraform plan review gates for pull requests before `main` deployment.
+- Add Terraform plan review gates for pull requests before promotion.
 - Add container vulnerability scanning and IaC scanning in CI.
 - Add ECS deployment circuit breaker and health-check tuned rollback behavior.
 - Parameterize environment names for dev/stage/prod isolation.
