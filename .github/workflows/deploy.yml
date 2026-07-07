@@ -8,6 +8,13 @@ on:
       - "nginx/**"
       - "terraform/**"
       - ".github/workflows/deploy.yml"
+  pull_request:
+    branches:
+      - dev
+    paths:
+      - "nginx/**"
+      - "terraform/**"
+      - ".github/workflows/deploy.yml"
   workflow_dispatch:
 
 concurrency:
@@ -63,6 +70,7 @@ jobs:
   build:
     name: Build and push immutable image
     needs: validate
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     environment:
       name: dev
@@ -178,3 +186,23 @@ jobs:
           terraform apply -auto-approve \
             -var-file="environments/prod.tfvars" \
             -var="container_image=${{ needs.build.outputs.image_uri }}"
+
+  sync-branches:
+    name: Fast-forward uat/prod/main to dev
+    needs: deploy-prod
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fast-forward branches
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          for branch in uat prod main; do
+            git checkout "$branch"
+            git merge --ff-only origin/dev
+            git push origin "$branch"
+          done
