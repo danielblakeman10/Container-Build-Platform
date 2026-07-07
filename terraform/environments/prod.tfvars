@@ -1,6 +1,6 @@
 environment = "prod"
 
-project_name = "man-cbp-prod"
+project_name = "man-cbp"
 aws_region   = "us-east-1"
 
 use_existing_network = true
