@@ -8,7 +8,7 @@ The repository demonstrates a production-shaped control plane: GitHub Actions us
 
 - Keyless GitHub Actions authentication to AWS using OpenID Connect.
 - Container build, tag, and push workflow into Amazon ECR.
-- Terraform-managed ECS delivery path using an S3 remote backend and import-backed adoption of live resources.
+- Terraform-managed ECS delivery path using S3 remote state, isolated dev/uat stacks, and the existing prod `man-cbp` stack.
 - ECS Fargate service deployment with an ALB target group.
 - Custom VPC with public and private subnets across multiple Availability Zones.
 - Public ingress is constrained through the ALB security group; ECS task ingress is allowed only from the ALB security group.
@@ -26,6 +26,10 @@ The repository demonstrates a production-shaped control plane: GitHub Actions us
 |   `-- app/index.html    # Static demo workload
 `-- terraform/
     |-- backend.tf        # Terraform version, provider, and S3 backend
+    |-- environments/
+    |   |-- dev.tfvars    # Dev VPC/ECS/ALB settings
+    |   |-- uat.tfvars    # UAT VPC/ECS/ALB settings
+    |   `-- prod.tfvars   # Existing man-cbp prod settings and WAF association
     |-- main.tf           # VPC, ALB, ECR, ECS, IAM, and CloudWatch resources
     |-- outputs.tf        # ALB, ECR, ECS service, and cluster outputs
     |-- provider.tf       # AWS provider configuration
@@ -42,7 +46,7 @@ The repository demonstrates a production-shaped control plane: GitHub Actions us
 | Authentication | GitHub OIDC + AWS IAM | Federates GitHub Actions to AWS without static AWS keys. |
 | Container Runtime | Docker | Builds the NGINX application image. |
 | Registry | Amazon ECR | Stores versioned container images. |
-| Infrastructure as Code | Terraform | Adopts and updates the live `man-cbp` ECS delivery resources. |
+| Infrastructure as Code | Terraform | Creates dev/uat stacks and updates the existing prod `man-cbp` ECS delivery path. |
 | Terraform State | Amazon S3 backend | Stores remote Terraform state for repeatable deployments. |
 | Networking | Amazon VPC | Provides public/private subnet isolation and routing. |
 | Ingress | Application Load Balancer | Exposes HTTP traffic to the service. |
@@ -84,11 +88,23 @@ flowchart LR
     end
 
     subgraph AWS["AWS Account"]
-        IAMRole[IAM OIDC deployment role]
+        DevRole[Dev OIDC deployment role]
+        UATRole[UAT OIDC deployment role]
+        ProdRole[Prod OIDC deployment role]
         S3[S3 Terraform state backend]
         ECR[Amazon ECR repository]
 
-        subgraph VPC["VPC: man-cbp-vpc"]
+        subgraph DevVPC["Dev VPC: man-cbp-dev-vpc"]
+            DevALB[Dev ALB]
+            DevECS[Dev ECS Fargate service]
+        end
+
+        subgraph UATVPC["UAT VPC: man-cbp-uat-vpc"]
+            UATALB[UAT ALB]
+            UATECS[UAT ECS Fargate service]
+        end
+
+        subgraph ProdVPC["Prod VPC: man-cbp-vpc"]
             IGW[Internet Gateway]
 
             subgraph Public["Public subnets"]
@@ -108,10 +124,16 @@ flowchart LR
     end
 
     Repo --> Actions
-    Actions -->|OIDC federation| IAMRole
+    Actions -->|OIDC federation| DevRole
+    Actions -->|OIDC federation| UATRole
+    Actions -->|OIDC federation| ProdRole
     Actions -->|docker push| ECR
     Actions -->|terraform init/apply| S3
-    Actions -->|provision/update| VPC
+    Actions -->|apply dev| DevVPC
+    Actions -->|apply uat| UATVPC
+    Actions -->|apply prod| ProdVPC
+    DevALB --> DevECS
+    UATALB --> UATECS
     IGW --> ALB
     ALB --> ALBSG
     ALBSG --> TaskSG
@@ -122,7 +144,7 @@ flowchart LR
     ECS -->|egress for image pulls and AWS APIs| NAT
 ```
 
-## AWS VPC Diagram
+## AWS VPC Diagram: Prod
 
 ```mermaid
 flowchart TB
@@ -157,6 +179,14 @@ flowchart TB
     ALB --> ECS
 ```
 
+Dev and UAT use the same public/private subnet pattern with dedicated CIDR ranges:
+
+| Environment | VPC | CIDR |
+| --- | --- | --- |
+| Dev | `man-cbp-dev-vpc` | `10.10.0.0/16` |
+| UAT | `man-cbp-uat-vpc` | `10.20.0.0/16` |
+| Prod | `man-cbp-vpc` | `10.0.0.0/16` |
+
 ## Deployment Flow
 
 1. A commit is pushed to `dev`, or the `Deploy nginx to Fargate` workflow is manually triggered.
@@ -164,7 +194,7 @@ flowchart TB
 3. The workflow logs in to Amazon ECR.
 4. Docker builds the image from `nginx/Dockerfile`.
 5. The image is tagged with the Git commit SHA and pushed to ECR.
-6. Terraform initializes against the environment-specific S3 backend key from the GitHub Environment variable `TF_STATE_KEY`.
+6. Terraform initializes against the environment-specific S3 backend key pinned in the workflow.
 7. Terraform applies dev first, then promotes the same image URI through uat and prod.
 8. Dev and uat create isolated environment stacks, while prod updates the existing `man-cbp` stack and WAF-protected ALB.
 9. ECS launches the updated NGINX task on Fargate and public users reach the service through the ALB DNS name.
@@ -180,7 +210,7 @@ This operating model follows the same production-style structure used in larger 
 | Keyless AWS access | GitHub Actions assumes AWS IAM roles through OIDC. | Scope trust policies by repository, branch, environment, and workflow. |
 | Immutable deploy artifact | Images are tagged with the Git commit SHA. | Promote the same digest across dev, UAT, and production instead of rebuilding. |
 | Infrastructure as code | Terraform creates isolated dev and uat stacks and updates the existing prod `man-cbp` stack. | Split networking, platform, and application stacks into separate state files or modules. |
-| Remote state | Terraform uses an S3 backend with one state key per GitHub Environment. | Centralize state in a tooling account with encryption, versioning, least-privilege access, and locking. |
+| Remote state | Terraform uses an S3 backend with one state key per environment. | Centralize state in a tooling account with encryption, versioning, least-privilege access, and locking. |
 | Environment control | The workflow promotes in order: dev -> uat -> prod. | Move each environment into separate AWS accounts when the platform matures. |
 | Approval control | GitHub Environments can gate uat and prod before `terraform apply`. | Require protected GitHub Environments and approval gates before production apply. |
 | Runtime isolation | ECS task ingress is restricted to the ALB security group. | Disable task public IP assignment, add VPC endpoints, private image pulls, HTTPS-only ingress, and environment-specific CIDRs. |
@@ -206,7 +236,7 @@ flowchart LR
 | Workflow | Trigger | Responsibility | AWS role target |
 | --- | --- | --- | --- |
 | `.github/workflows/oidc-debug.yml` | Manual only | Validates GitHub-to-AWS OIDC trust by running `aws sts get-caller-identity`. | `GitHubActionsOIDCRole` |
-| `.github/workflows/deploy.yml` | Push to `dev` or manual dispatch | Builds the NGINX image once, pushes it to ECR, then applies dev, uat, and prod using GitHub Environment-scoped OIDC roles and Terraform state keys. | `container-build-platform-dev-gha-role`, `container-build-platform-uat-gha-role`, `container-build-platform-prod-gha-role` |
+| `.github/workflows/deploy.yml` | Push to `dev` or manual dispatch | Builds the NGINX image once, pushes it to ECR, then applies dev, uat, and prod using GitHub Environment-scoped OIDC roles and pinned Terraform state keys. | `container-build-platform-dev-gha-role`, `container-build-platform-uat-gha-role`, `container-build-platform-prod-gha-role` |
 
 ### Environment Promotion Model
 
@@ -226,6 +256,12 @@ Each GitHub Environment should define:
 | `AWS_ROLE_ARN` | `arn:aws:iam::866934333672:role/container-build-platform-dev-gha-role` |
 
 The workflow builds the immutable artifact into the existing shared ECR repository `man-cbp/nginx`, then passes that image URI into each environment. Terraform state keys and tfvars files are pinned in the workflow so prod always uses the existing `man-cbp/terraform.tfstate` state unless you intentionally migrate it.
+
+The current successful deployment run is:
+
+```text
+https://github.com/danielblakeman10/Container-Build-Platform/actions/runs/28829161776
+```
 
 ### Recommended Workflow Separation
 
@@ -254,6 +290,8 @@ After each deployment, validate the platform with:
 ```bash
 aws sts get-caller-identity
 aws ecr describe-images --repository-name man-cbp/nginx
+aws ecs describe-services --cluster man-cbp-dev-cluster --services man-cbp-dev-nginx-service
+aws ecs describe-services --cluster man-cbp-uat-cluster --services man-cbp-uat-nginx-service
 aws ecs describe-services --cluster man-cbp-cluster --services man-cbp-nginx-service
 aws elbv2 describe-target-health --target-group-arn <target-group-arn>
 curl -I http://<alb_dns_name>
@@ -261,24 +299,20 @@ curl -I http://<alb_dns_name>
 
 ## AWS Resources Provisioned
 
-| Resource | Description |
-| --- | --- |
-| VPC | Existing DNS-enabled `man-cbp-vpc` using `10.0.0.0/16`. |
-| Public subnets | Existing public subnets used by the internet-facing ALB. |
-| Private subnets | Existing private subnets `10.0.128.0/20` and `10.0.144.0/20` used by ECS tasks. |
-| Internet Gateway | Provides public internet routing for the ALB and NAT Gateway. |
-| NAT Gateway | Existing regional NAT Gateway for private route-table egress. |
-| Route tables | Separate public and private routing domains. |
-| ALB security group | Allows inbound HTTP on port 80 from the public internet. |
-| Task security group | Allows inbound container traffic only from the ALB security group. |
-| Application Load Balancer | Existing `man-cbp-alb` public HTTP entry point for the NGINX service. |
-| Target group | IP-based target group for Fargate tasks. |
-| ECR repository | `man-cbp/nginx` stores the NGINX container image with scan-on-push enabled. |
-| ECS cluster | `man-cbp-cluster` Fargate cluster with enhanced Container Insights enabled. |
-| ECS task definition | Runs the NGINX image with CloudWatch log configuration. |
-| ECS service | Maintains the desired task count and registers tasks with the ALB. |
-| CloudWatch log group | `/ecs/man-cbp-nginx` stores NGINX container logs with 30-day retention. |
-| IAM task execution role | Allows ECS to pull images and write logs. |
+| Environment | Resource boundary | Key resources |
+| --- | --- | --- |
+| Dev | Dedicated Terraform-created stack | `man-cbp-dev-vpc`, `man-cbp-dev-alb`, `man-cbp-dev-cluster`, `man-cbp-dev-nginx-service`, `/ecs/man-cbp-dev-nginx`, `man-cbp/dev/nginx` |
+| UAT | Dedicated Terraform-created stack | `man-cbp-uat-vpc`, `man-cbp-uat-alb`, `man-cbp-uat-cluster`, `man-cbp-uat-nginx-service`, `/ecs/man-cbp-uat-nginx`, `man-cbp/uat/nginx` |
+| Prod | Existing demo stack updated by Terraform | `man-cbp-vpc`, `man-cbp-alb`, `man-cbp-cluster`, `man-cbp-nginx-service`, `/ecs/man-cbp-nginx`, `man-cbp/nginx`, `dcb-container-build-platform-waf` |
+
+Common resources and controls:
+
+- Dev and UAT each use a dedicated VPC CIDR: `10.10.0.0/16` for dev and `10.20.0.0/16` for UAT.
+- Prod uses the existing `10.0.0.0/16` `man-cbp-vpc`.
+- Each environment has public ALB ingress and private ECS task subnets.
+- ECS task security groups allow inbound container traffic only from their environment ALB security group.
+- Prod keeps the regional AWS WAF Web ACL associated to `man-cbp-alb`.
+- The build pipeline pushes the deployable artifact to the shared ECR repository `man-cbp/nginx` with the Git SHA tag.
 
 ## Security Model
 
@@ -346,8 +380,8 @@ Inspect planned AWS changes when backend and credentials are configured:
 
 ```bash
 cd terraform
-terraform init
-terraform plan -var="container_image=<account-id>.dkr.ecr.us-east-1.amazonaws.com/man-cbp/nginx:<tag>"
+terraform init -reconfigure -backend-config="key=man-cbp/dev/terraform.tfstate"
+terraform plan -var-file="environments/dev.tfvars" -var="container_image=<account-id>.dkr.ecr.us-east-1.amazonaws.com/man-cbp/nginx:<tag>"
 ```
 
 ## Demo Script
@@ -373,9 +407,9 @@ terraform plan -var="container_image=<account-id>.dkr.ecr.us-east-1.amazonaws.co
 
 ## Estimated Cost and FinOps Budget
 
-This stack is intentionally small, but it still has real always-on AWS cost drivers. The estimate below assumes `us-east-1`, one ECS Fargate task running 24/7, `512` CPU units, `1024` MiB memory, one public Application Load Balancer, one NAT Gateway, light demo traffic, and a 730-hour month.
+This platform is intentionally small, but it still has real always-on AWS cost drivers. The estimate below assumes `us-east-1`, one ECS Fargate task per environment running 24/7, `512` CPU units, `1024` MiB memory, one public Application Load Balancer per environment, one NAT Gateway per non-production environment, light demo traffic, and a 730-hour month.
 
-| Cost component | Estimated monthly cost | FinOps note |
+| Cost component | Estimated monthly cost per always-on environment | FinOps note |
 | --- | ---: | --- |
 | ECS Fargate | ~$18 | Based on one Linux/x86 task using `0.5 vCPU` and `1 GB` memory running continuously. |
 | Application Load Balancer | ~$22-$30 | Includes ALB hourly cost, light LCU usage, and public IPv4 impact. |
@@ -383,15 +417,20 @@ This stack is intentionally small, but it still has real always-on AWS cost driv
 | Amazon ECR | <$1 | NGINX images are small; cost grows with retained image count and image size. |
 | CloudWatch Logs | <$1-$5 | Depends on container log volume and Container Insights metric ingestion. |
 | S3 Terraform state | Pennies | Terraform state storage and requests are negligible for this project. |
+| AWS WAF | Prod only: ~$8-$15+ | Depends on Web ACL count, rules, managed rule groups, and inspected request volume. |
 | Data transfer out | Variable | Internet egress depends on demo traffic volume. |
 
-Expected always-on demo budget:
+Expected always-on budget for all three environments:
 
 ```text
-Approximate monthly range: $85-$100
+Dev:  ~$85/month
+UAT:  ~$85/month
+Prod: ~$55-$90/month, depending on NAT and WAF usage
+
+Approximate total: ~$225-$275/month
 ```
 
-If this environment is only needed for demos, the strongest cost control is scheduled teardown. Running the stack for 40 hours/month instead of continuously can reduce the active infrastructure cost dramatically, especially for NAT Gateway, ALB, and Fargate.
+If dev and UAT are only needed for demos, the strongest cost control is scheduled teardown. Destroying non-production stacks when they are not being demonstrated can save roughly `$170/month` because ALB, NAT Gateway, public IPv4, and Fargate charges continue while those environments exist.
 
 ### Primary Cost Drivers
 
@@ -406,11 +445,11 @@ If this environment is only needed for demos, the strongest cost control is sche
 - Add consistent tags such as `Project`, `Environment`, `Owner`, `CostCenter`, and `ManagedBy`.
 - Create AWS Budgets alerts at `$25`, `$50`, and `$100` monthly thresholds.
 - Add ECR lifecycle policies to expire stale image tags and untagged images.
-- Keep ECS desired count at `1` for demo environments.
+- Keep ECS desired count at `1` only for active demo environments.
 - Destroy non-production infrastructure when not actively demonstrating the platform.
 - Add VPC endpoints for ECR, CloudWatch Logs, and S3 if NAT Gateway data processing becomes material.
 - Group Cost Explorer views by service and project tags.
-- Separate dev, UAT, and production state keys or accounts before scaling this pattern.
+- Keep dev, UAT, and production state isolated; move to separate AWS accounts before scaling this pattern.
 
 Recommended demo talk track:
 
@@ -429,4 +468,4 @@ The platform is intentionally small, but it still demonstrates real FinOps trade
 - Add Terraform plan review gates for pull requests before promotion.
 - Add container vulnerability scanning and IaC scanning in CI.
 - Add ECS deployment circuit breaker and health-check tuned rollback behavior.
-- Parameterize environment names for dev/stage/prod isolation.
+- Add scheduled teardown or a manual destroy workflow for dev and UAT.
