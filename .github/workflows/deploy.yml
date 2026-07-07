@@ -31,7 +31,7 @@ permissions: # OIDC permissions for the workflow to assume the AWS role and acce
 env: # Environment variables for the workflow, including AWS region, ECR repository name, and Terraform version
   AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
   AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
-  ECR_REPOSITORY: vars.ECR_REPOSITORY
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
   ENV_NAME: ${{ vars.ENV_NAME }}
 
 jobs:
