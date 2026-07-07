@@ -275,7 +275,7 @@ jobs:
         working-directory: terraform
         run: |
           terraform apply -auto-approve \
-            -var-file="environments/env.${{ vars.ENV_NAME }}.tfvars" \
+            -var-file="environments/${{ vars.ENV_NAME }}.tfvars" \
             -var="container_image=${{ steps.promote-image.outputs.image_uri }}"
 
   sync-main-branch:
