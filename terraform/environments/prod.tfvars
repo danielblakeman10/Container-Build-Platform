@@ -11,6 +11,11 @@ target_group_name        = "man-cbp-vpc"
 alb_security_group_name  = "man-cbpo-alb-sg"
 task_security_group_name = "man-cbp-task-sg"
 
+existing_public_subnet_1_name  = "man-cbp-prod-public-1"
+existing_public_subnet_2_name  = "man-cbp-prod-public-2"
+existing_private_subnet_1_name = "man-cbp-prod-private-1"
+existing_private_subnet_2_name = "man-cbp-prod-private-2"
+
 ecr_repository_name = "man-cbp/prod/nginx"
 ecs_cluster_name    = "man-cbp-prod-cluster"
 ecs_service_name    = "man-cbp-prod-nginx-service"

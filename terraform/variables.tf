@@ -69,6 +69,30 @@ variable "target_group_name" {
   type        = string
 }
 
+variable "existing_public_subnet_1_name" {
+  description = "Name tag of the first existing public subnet (only used when use_existing_network is true)"
+  type        = string
+  default     = null
+}
+
+variable "existing_public_subnet_2_name" {
+  description = "Name tag of the second existing public subnet (only used when use_existing_network is true)"
+  type        = string
+  default     = null
+}
+
+variable "existing_private_subnet_1_name" {
+  description = "Name tag of the first existing private subnet (only used when use_existing_network is true)"
+  type        = string
+  default     = null
+}
+
+variable "existing_private_subnet_2_name" {
+  description = "Name tag of the second existing private subnet (only used when use_existing_network is true)"
+  type        = string
+  default     = null
+}
+
 variable "alb_security_group_name" {
   description = "ALB security group name"
   type        = string
