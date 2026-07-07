@@ -1,79 +1,80 @@
-name: Deploy nginx to Fargate
+name: Deploy nginx to Fargate #Workflow deploys nginx to Fargate using Terraform and GitHub Actions
 
-on:
-  push:
-    branches:
+on: # Trigger workflow on push to dev, uat, or prod branches, or on pull requests to those branches, or manually via workflow_dispatch
+  push:  # 
+    branches: 
       - dev
     paths:
       - "nginx/**"
       - "terraform/**"
       - ".github/workflows/deploy.yml"
-  pull_request:
+  pull_request: # Create a pull request to dev, uat, or prod branches, or push to those branches, or manually via workflow_dispatch
     branches:
-      - dev
+      - uat
+      - prod
     paths:
       - "nginx/**"
       - "terraform/**"
       - ".github/workflows/deploy.yml"
   workflow_dispatch:
 
-concurrency:
+concurrency: # Prevent concurrent runs of the workflow for the same branch, allowing only one run at a time per branch
   group: ${{ github.workflow }}
   cancel-in-progress: false
 
-permissions:
+permissions: # OIDC permissions for the workflow to assume the AWS role and access the ECR repository, as well as write permissions for the GitHub token to create pull requests and manage security events
   id-token: write
-  contents: read
+  contents: write
+  pull-requests: write
   security-events: write
 
-env:
-  AWS_REGION: us-east-1
-  BUILD_ECR_REPOSITORY: man-cbp/nginx
-  TERRAFORM_VERSION: 1.15.7
+env: # Environment variables for the workflow, including AWS region, ECR repository name, and Terraform version
+  AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+  AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+  ENV_NAME: ${{ vars.ENV_NAME }}
 
 jobs:
-  validate:
+  validate: # Validate Terraform and IaC
     name: Validate Terraform and IaC
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout repository 
         uses: actions/checkout@v4
 
       - name: Install Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_version: env.TERRAFORM_VERSION
 
       - name: Terraform format check
         working-directory: terraform
         run: terraform fmt -check -recursive
 
-      - name: Terraform validate
+      - name: Terraform validate # Validate Terraform configuration files for syntax and internal consistency
         working-directory: terraform
         env:
-          AWS_ACCESS_KEY_ID: dummy
-          AWS_SECRET_ACCESS_KEY: dummy
-          AWS_DEFAULT_REGION: ${{ env.AWS_REGION }}
+          AWS_DEFAULT_REGION: env.AWS_REGION
           AWS_EC2_METADATA_DISABLED: true
           AWS_SKIP_CREDENTIALS_VALIDATION: true
         run: |
           terraform init -backend=false
           terraform validate
 
-      - name: Run Checkov static analysis
-        uses: bridgecrewio/checkov-action@master
+      - name: Run Checkov static analysis # Run Checkov static analysis on the Terraform code to identify security and compliance issues
+        uses: bridgecrewio/checkov-action@master #such as encryption, vulnerabilities, and best practice violations
         with:
           directory: terraform/
           framework: terraform
           soft_fail: true
 
   build:
-    name: Build and push immutable image
+    name: Build and push immutable image # Build and push an immutable Docker image to Amazon ECR, tagging it with the Git commit SHA
     needs: validate
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     environment:
-      name: dev
+      name: ${{ github.ref_name }}
     outputs:
       image_uri: ${{ steps.build-image.outputs.image_uri }}
     steps:
@@ -83,26 +84,27 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION || env.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }} # The IAM role to assume
+          aws-region: ${{ vars.AWS_REGION }} # The AWS region
 
-      - name: Login to Amazon ECR
+      - name: Login to Amazon ECR # Log in to Amazon ECR to allow Docker to push the image
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Build, tag, and push image
         id: build-image
         env:
-          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }} # The Amazon ECR registry URI
+          IMAGE_TAG: ${{ github.sha }} # The Git commit SHA to use as the image tag
         run: |
-          docker build -t "$ECR_REGISTRY/$BUILD_ECR_REPOSITORY:$IMAGE_TAG" ./nginx
-          docker push "$ECR_REGISTRY/$BUILD_ECR_REPOSITORY:$IMAGE_TAG"
-          echo "image_uri=$ECR_REGISTRY/$BUILD_ECR_REPOSITORY:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+          docker build -t "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" ./nginx
+          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          echo "image_uri=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
 
   deploy-dev:
     name: Deploy dev
     needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/dev'
     runs-on: ubuntu-latest
     environment:
       name: dev
@@ -113,13 +115,13 @@ jobs:
       - name: Install Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_version: env.TERRAFORM_VERSION
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION || env.AWS_REGION }}
+          aws-region: ${{ vars.AWS_REGION }}
 
       - name: Terraform init
         working-directory: terraform
@@ -143,9 +145,9 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
         run: |
           docker pull "${{ needs.build.outputs.image_uri }}"
-          docker tag "${{ needs.build.outputs.image_uri }}" "$ECR_REGISTRY/${{ vars.ECR_REPOSITORY }}:$IMAGE_TAG"
-          docker push "$ECR_REGISTRY/${{ vars.ECR_REPOSITORY }}:$IMAGE_TAG"
-          echo "image_uri=$ECR_REGISTRY/${{ vars.ECR_REPOSITORY }}:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+          docker tag "${{ needs.build.outputs.image_uri }}" "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          echo "image_uri=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Terraform apply
         working-directory: terraform
@@ -155,8 +157,9 @@ jobs:
             -var="container_image=${{ steps.promote-image.outputs.image_uri }}"
 
   deploy-uat:
-    name: Promote to uat
-    needs: [build, deploy-dev]
+    name: Deploy uat
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/uat'
     runs-on: ubuntu-latest
     environment:
       name: uat
@@ -167,17 +170,17 @@ jobs:
       - name: Install Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_version: env.TERRAFORM_VERSION
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION || env.AWS_REGION }}
+          aws-region: ${{ vars.AWS_REGION }}
 
       - name: Terraform init
         working-directory: terraform
-        run: terraform init -reconfigure -backend-config="key=man-cbp/${{ vars.ENV_NAME }}/terraform.tfstate"
+        run: terraform init -reconfigure -backend-config="key=man-cbp/env.${{ vars.ENV_NAME }}/terraform.tfstate"
 
       - name: Ensure environment ECR repository exists
         working-directory: terraform
@@ -187,7 +190,7 @@ jobs:
             -var="container_image=${{ needs.build.outputs.image_uri }}"
 
       - name: Login to Amazon ECR
-        id: ecr-login
+        id: ecr-login # Log in using Amazon Credentials to allow Docker to pull and push images to the ECR repository
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Promote image to environment repository
@@ -208,9 +211,32 @@ jobs:
             -var-file="environments/${{ vars.ENV_NAME }}.tfvars" \
             -var="container_image=${{ steps.promote-image.outputs.image_uri }}"
 
+  open-prod-promotion-pr:
+    name: Open promotion PR to prod
+    needs: deploy-uat
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/uat'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Open or reuse promotion PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          existing_pr=$(gh pr list --base prod --head uat --state open --json number --jq '.[0].number')
+          if [ -z "$existing_pr" ]; then
+            gh pr create --base prod --head uat \
+              --title "Promote uat to prod" \
+              --body "Automated promotion PR opened after a successful uat deployment (commit ${{ github.sha }})."
+          else
+            echo "PR #$existing_pr already open for uat -> prod, nothing to do."
+          fi
+
   deploy-prod:
-    name: Promote to prod
-    needs: [build, deploy-uat]
+    name: Deploy prod
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/prod'
     runs-on: ubuntu-latest
     environment:
       name: prod
@@ -221,17 +247,17 @@ jobs:
       - name: Install Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_version: env.TERRAFORM_VERSION
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION || env.AWS_REGION }}
+          aws-region: ${{ vars.AWS_REGION }}
 
       - name: Terraform init
         working-directory: terraform
-        run: terraform init -reconfigure -backend-config="key=man-cbp/${{ vars.ENV_NAME }}/terraform.tfstate"
+        run: terraform init -reconfigure -backend-config="key=man-cbp/env.${{ vars.ENV_NAME }}/terraform.tfstate"
 
       - name: Ensure environment ECR repository exists
         working-directory: terraform
@@ -259,12 +285,13 @@ jobs:
         working-directory: terraform
         run: |
           terraform apply -auto-approve \
-            -var-file="environments/${{ vars.ENV_NAME }}.tfvars" \
+            -var-file="environments/env.${{ vars.ENV_NAME }}.tfvars" \
             -var="container_image=${{ steps.promote-image.outputs.image_uri }}"
 
-  sync-branches:
-    name: Fast-forward uat/prod/main to dev
+  sync-main-branch:
+    name: Fast-forward main to prod
     needs: deploy-prod
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/prod'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -272,12 +299,5 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Fast-forward branches
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          for branch in uat prod main; do
-            git checkout "$branch"
-            git merge --ff-only origin/dev
-            git push origin "$branch"
-          done
+      - name: Fast-forward main
+        run: git push origin HEAD:main
