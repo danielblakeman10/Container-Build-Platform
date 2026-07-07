@@ -16,7 +16,7 @@ data "aws_subnet" "existing_public_1" {
 
   filter {
     name   = "tag:Name"
-    values = ["${var.project_name}-subnet-public1-us-east-1a"]
+    values = [var.existing_public_subnet_1_name]
   }
 }
 
@@ -25,7 +25,7 @@ data "aws_subnet" "existing_public_2" {
 
   filter {
     name   = "tag:Name"
-    values = ["${var.project_name}-subnet-public2-us-east-1b"]
+    values = [var.existing_public_subnet_2_name]
   }
 }
 
@@ -34,7 +34,7 @@ data "aws_subnet" "existing_private_1" {
 
   filter {
     name   = "tag:Name"
-    values = ["${var.project_name}-subnet-private1-us-east-1a"]
+    values = [var.existing_private_subnet_1_name]
   }
 }
 
@@ -43,7 +43,7 @@ data "aws_subnet" "existing_private_2" {
 
   filter {
     name   = "tag:Name"
-    values = ["${var.project_name}-subnet-private2-us-east-1b"]
+    values = [var.existing_private_subnet_2_name]
   }
 }
 
