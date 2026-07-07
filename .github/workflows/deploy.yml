@@ -98,8 +98,6 @@ jobs:
         env:
           ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }} # The Amazon ECR registry URI
           IMAGE_TAG: ${{ github.sha }}-${{ github.run_id }} # The Git commit SHA plus run ID, unique per run (not just per retry), so re-pushing the same commit doesn't collide with an immutable tag
-          IMAGE_TAG: ${{ github.sha }}-${{ github.run_id }} # The Git commit SHA plus run ID, unique per run (not just per retry), so re-pushing the same commit doesn't collide with an immutable tag
-
         run: |
           docker build -t "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" ./nginx
           docker push "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
