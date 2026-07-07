@@ -172,5 +172,5 @@ variable "container_insights" {
 variable "ecr_image_tag_mutability" {
   description = "ECR image tag mutability setting"
   type        = string
-  default     = "MUTABLE"
+  default     = "IMMUTABLE"
 }
