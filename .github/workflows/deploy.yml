@@ -182,7 +182,7 @@ jobs:
 
       - name: Terraform init
         working-directory: terraform
-        run: terraform init -reconfigure -backend-config="key=man-cbp/env.${{ vars.ENV_NAME }}/terraform.tfstate"
+        run: terraform init -reconfigure -backend-config="key=man-cbp/${{ vars.ENV_NAME }}/terraform.tfstate"
 
       - name: Ensure environment ECR repository exists
         working-directory: terraform
@@ -222,19 +222,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Open or reuse promotion PR
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          existing_pr=$(gh pr list --base prod --head uat --state open --json number --jq '.[0].number')
-          if [ -z "$existing_pr" ]; then
-            gh pr create --base prod --head uat \
-              --title "Promote uat to prod" \
-              --body "Automated promotion PR opened after a successful uat deployment (commit ${{ github.sha }})."
-          else
-            echo "PR #$existing_pr already open for uat -> prod, nothing to do."
-          fi
-
   deploy-prod:
     name: Deploy prod
     needs: build
@@ -259,7 +246,7 @@ jobs:
 
       - name: Terraform init
         working-directory: terraform
-        run: terraform init -reconfigure -backend-config="key=man-cbp/env.${{ vars.ENV_NAME }}/terraform.tfstate"
+        run: terraform init -reconfigure -backend-config="key=man-cbp/${{ vars.ENV_NAME }}/terraform.tfstate"
 
       - name: Ensure environment ECR repository exists
         working-directory: terraform
