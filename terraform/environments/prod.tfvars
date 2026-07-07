@@ -11,7 +11,7 @@ target_group_name        = "man-cbp-vpc"
 alb_security_group_name  = "man-cbpo-alb-sg"
 task_security_group_name = "man-cbp-task-sg"
 
-ecr_repository_name = "man-cbp/nginx"
+ecr_repository_name = "man-cbp/prod/nginx"
 ecs_cluster_name    = "man-cbp-cluster"
 ecs_service_name    = "man-cbp-nginx-service"
 task_family         = "man-cbp-nginx"

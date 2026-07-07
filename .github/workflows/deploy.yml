@@ -28,7 +28,7 @@ permissions:
 
 env:
   AWS_REGION: us-east-1
-  ARTIFACT_ECR_REPOSITORY: man-cbp/nginx
+  BUILD_ECR_REPOSITORY: man-cbp/nginx
   TERRAFORM_VERSION: 1.15.7
 
 jobs:
@@ -96,9 +96,9 @@ jobs:
           ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          docker build -t "$ECR_REGISTRY/$ARTIFACT_ECR_REPOSITORY:$IMAGE_TAG" ./nginx
-          docker push "$ECR_REGISTRY/$ARTIFACT_ECR_REPOSITORY:$IMAGE_TAG"
-          echo "image_uri=$ECR_REGISTRY/$ARTIFACT_ECR_REPOSITORY:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+          docker build -t "$ECR_REGISTRY/$BUILD_ECR_REPOSITORY:$IMAGE_TAG" ./nginx
+          docker push "$ECR_REGISTRY/$BUILD_ECR_REPOSITORY:$IMAGE_TAG"
+          echo "image_uri=$ECR_REGISTRY/$BUILD_ECR_REPOSITORY:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
 
   deploy-dev:
     name: Deploy dev
@@ -121,13 +121,38 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || env.AWS_REGION }}
 
+      - name: Terraform init
+        working-directory: terraform
+        run: terraform init -reconfigure -backend-config="key=man-cbp/${{ vars.ENV_NAME }}/terraform.tfstate"
+
+      - name: Ensure environment ECR repository exists
+        working-directory: terraform
+        run: |
+          terraform apply -auto-approve -target=aws_ecr_repository.nginx \
+            -var-file="environments/${{ vars.ENV_NAME }}.tfvars" \
+            -var="container_image=${{ needs.build.outputs.image_uri }}"
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Promote image to environment repository
+        id: promote-image
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker pull "${{ needs.build.outputs.image_uri }}"
+          docker tag "${{ needs.build.outputs.image_uri }}" "$ECR_REGISTRY/${{ vars.ECR_REPOSITORY }}:$IMAGE_TAG"
+          docker push "$ECR_REGISTRY/${{ vars.ECR_REPOSITORY }}:$IMAGE_TAG"
+          echo "image_uri=$ECR_REGISTRY/${{ vars.ECR_REPOSITORY }}:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+
       - name: Terraform apply
         working-directory: terraform
         run: |
-          terraform init -reconfigure -backend-config="key=man-cbp/dev/terraform.tfstate"
           terraform apply -auto-approve \
-            -var-file="environments/dev.tfvars" \
-            -var="container_image=${{ needs.build.outputs.image_uri }}"
+            -var-file="environments/${{ vars.ENV_NAME }}.tfvars" \
+            -var="container_image=${{ steps.promote-image.outputs.image_uri }}"
 
   deploy-uat:
     name: Promote to uat
@@ -150,13 +175,38 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || env.AWS_REGION }}
 
+      - name: Terraform init
+        working-directory: terraform
+        run: terraform init -reconfigure -backend-config="key=man-cbp/${{ vars.ENV_NAME }}/terraform.tfstate"
+
+      - name: Ensure environment ECR repository exists
+        working-directory: terraform
+        run: |
+          terraform apply -auto-approve -target=aws_ecr_repository.nginx \
+            -var-file="environments/${{ vars.ENV_NAME }}.tfvars" \
+            -var="container_image=${{ needs.build.outputs.image_uri }}"
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Promote image to environment repository
+        id: promote-image
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker pull "${{ needs.build.outputs.image_uri }}"
+          docker tag "${{ needs.build.outputs.image_uri }}" "$ECR_REGISTRY/${{ vars.ECR_REPOSITORY }}:$IMAGE_TAG"
+          docker push "$ECR_REGISTRY/${{ vars.ECR_REPOSITORY }}:$IMAGE_TAG"
+          echo "image_uri=$ECR_REGISTRY/${{ vars.ECR_REPOSITORY }}:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+
       - name: Terraform apply
         working-directory: terraform
         run: |
-          terraform init -reconfigure -backend-config="key=man-cbp/uat/terraform.tfstate"
           terraform apply -auto-approve \
-            -var-file="environments/uat.tfvars" \
-            -var="container_image=${{ needs.build.outputs.image_uri }}"
+            -var-file="environments/${{ vars.ENV_NAME }}.tfvars" \
+            -var="container_image=${{ steps.promote-image.outputs.image_uri }}"
 
   deploy-prod:
     name: Promote to prod
@@ -179,13 +229,38 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || env.AWS_REGION }}
 
+      - name: Terraform init
+        working-directory: terraform
+        run: terraform init -reconfigure -backend-config="key=man-cbp/${{ vars.ENV_NAME }}/terraform.tfstate"
+
+      - name: Ensure environment ECR repository exists
+        working-directory: terraform
+        run: |
+          terraform apply -auto-approve -target=aws_ecr_repository.nginx \
+            -var-file="environments/${{ vars.ENV_NAME }}.tfvars" \
+            -var="container_image=${{ needs.build.outputs.image_uri }}"
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Promote image to environment repository
+        id: promote-image
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker pull "${{ needs.build.outputs.image_uri }}"
+          docker tag "${{ needs.build.outputs.image_uri }}" "$ECR_REGISTRY/${{ vars.ECR_REPOSITORY }}:$IMAGE_TAG"
+          docker push "$ECR_REGISTRY/${{ vars.ECR_REPOSITORY }}:$IMAGE_TAG"
+          echo "image_uri=$ECR_REGISTRY/${{ vars.ECR_REPOSITORY }}:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+
       - name: Terraform apply
         working-directory: terraform
         run: |
-          terraform init -reconfigure -backend-config="key=man-cbp/terraform.tfstate"
           terraform apply -auto-approve \
-            -var-file="environments/prod.tfvars" \
-            -var="container_image=${{ needs.build.outputs.image_uri }}"
+            -var-file="environments/${{ vars.ENV_NAME }}.tfvars" \
+            -var="container_image=${{ steps.promote-image.outputs.image_uri }}"
 
   sync-branches:
     name: Fast-forward uat/prod/main to dev
